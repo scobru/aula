@@ -183,3 +183,36 @@ test('0.2 database (email column) migrates; old email still logs in as username'
   assert.equal(r.status, 200);
   s.close(); fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('password reset: only for students that belong solely to your classes', async () => {
+  const [other, zoe, yan] = [await signup('otherteacher'), await signup('zoe'), await signup('yan')];
+  const mine = (await ok(call(teacher, 'POST', '/api/classes', { name: 'Reset' }))).id;
+  const mineCode = (await ok(call(teacher, 'GET', `/api/classes/${mine}`))).class.code;
+  await ok(call(zoe, 'POST', '/api/join', { code: mineCode }));
+  await ok(call(yan, 'POST', '/api/join', { code: mineCode }));
+  const people = (await ok(call(teacher, 'GET', `/api/classes/${mine}`))).people;
+  const id = n => people.find(p => p.name === n).id;
+  await ok(call(zoe, 'POST', `/api/classes/${mine}/members/${id('yan')}/reset`), 403);        // student cannot
+  await ok(call(teacher, 'POST', `/api/classes/${mine}/members/${id('teacher')}/reset`), 403); // teachers cannot be reset here
+  // yan also joins a class the teacher does not teach -> hands off
+  const theirs = (await ok(call(other, 'POST', '/api/classes', { name: 'Theirs' }))).id;
+  await ok(call(yan, 'POST', '/api/join', { code: (await ok(call(other, 'GET', `/api/classes/${theirs}`))).class.code }));
+  await ok(call(teacher, 'POST', `/api/classes/${mine}/members/${id('yan')}/reset`), 403);
+  const r = await ok(call(teacher, 'POST', `/api/classes/${mine}/members/${id('zoe')}/reset`));
+  assert.equal(r.username, 'zoe');
+  await ok(call(zoe, 'GET', '/api/me'), 401, 'old session dies');
+  await ok(call(null, 'POST', '/api/login', { username: 'zoe', password: 'password1' }), 401);
+  await ok(call(null, 'POST', '/api/login', { username: 'zoe', password: r.password }));
+});
+
+test('operator reset by username', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aula-op-'));
+  const s = createServer({ data: dir });
+  await new Promise(r => s.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${s.address().port}/api/`;
+  await fetch(url + 'register', { method: 'POST', body: JSON.stringify({ name: 'Op', username: 'oper', password: 'password1' }) });
+  const pw = s.resetPassword('OPER');
+  assert.equal((await fetch(url + 'login', { method: 'POST', body: JSON.stringify({ username: 'oper', password: pw }) })).status, 200);
+  assert.equal(s.resetPassword('nobody'), null);
+  s.close(); fs.rmSync(dir, { recursive: true, force: true });
+});
