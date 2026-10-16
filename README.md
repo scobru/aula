@@ -26,9 +26,22 @@ npm test
 
 ```bash
 docker compose up -d --build     # http://127.0.0.1:8788, data in the `aula-data` volume
+# options: AULA_PORT=9000 AULA_REGISTRATION=closed docker compose up -d --build
 ```
 
 Put HTTPS in front before exposing it, e.g. Caddy: `aula.example.org { reverse_proxy 127.0.0.1:8788 }`. Back up the `/data` volume (`aula.db` + `files/`). Set `AULA_REGISTRATION=closed` once everyone has an account.
+
+### CapRover
+
+`captain-definition` points CapRover at the `Dockerfile`, so a deploy is one command.
+
+1. Create an app (for example `aula`).
+2. **App Configs → Persistent Directories**: add `/data` (keep "managed by CapRover"; a host path must be writable by uid 1000, the `node` user in the image).
+3. **HTTP Settings**: set *Container HTTP Port* to `8788` (CapRover defaults to 80), then enable HTTPS and Force HTTPS.
+4. Optional environment variables: `AULA_REGISTRATION=closed`, `AULA_MAX_UPLOAD=25000000`.
+5. From the repo root: `caprover deploy` (or connect the GitHub repository in the Deployment tab).
+
+Run a single instance (the database is one SQLite file). To reset a forgotten password from the server: open the app's web terminal and run `node server.js reset-password <username>`.
 
 Without Docker: `PORT=8788 AULA_DATA=/var/lib/aula node --no-warnings server.js`. API is plain JSON with `Authorization: Bearer <token>`; see `server.js`.
 
@@ -36,7 +49,7 @@ Without Docker: `PORT=8788 AULA_DATA=/var/lib/aula node --no-warnings server.js`
 
 - 0.1 databases are not migrated (0.1 was never released): delete `data/`. 0.2 databases migrate automatically (old emails keep working as usernames).
 - No password reset: usernames are the only identity, so a forgotten password cannot be recovered yet (planned: reset by the class owner).
-- The Dockerfile has not been built in CI.
+- The Dockerfile and the CapRover definition have not been built or deployed from CI (only checked for consistency).
 - No email, per-user upload quota, rubrics, or import/export of a whole class.
 - Posts for selected students notify only those students; a student removed from the class stays in old audiences (harmless).
 - A scheduled post does not notify anyone when it goes live.

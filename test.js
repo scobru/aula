@@ -231,6 +231,19 @@ test('0.4 database (no audience/url columns) upgrades in place', async () => {
   check.close(); s.close(); fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('deploy files agree with each other', () => {
+  const read = f => fs.readFileSync(new URL(f, import.meta.url), 'utf8');
+  const cap = JSON.parse(read('./captain-definition'));
+  assert.equal(cap.schemaVersion, 2);
+  assert.ok(fs.existsSync(new URL(cap.dockerfilePath, import.meta.url)), 'captain-definition points at a real Dockerfile');
+  const docker = read('./Dockerfile'), port = docker.match(/PORT=(\d+)/)[1];
+  assert.match(docker, new RegExp(`EXPOSE ${port}\\b`));
+  assert.match(docker, /HEALTHCHECK/);
+  assert.match(docker, /HOST=0\.0\.0\.0/, 'must listen on all interfaces inside a container');
+  assert.match(read('./compose.yml'), new RegExp(`:${port}"\\]`), 'compose maps the same container port');
+  for (const f of ['server.js', 'package.json', 'web']) assert.ok(fs.existsSync(new URL('./' + f, import.meta.url)) && docker.includes(f), `Dockerfile copies ${f}`);
+});
+
 test('static files and path traversal', async () => {
   assert.equal((await call(null, 'GET', '/')).status, 200);
   assert.equal((await call(null, 'GET', '/../server.js')).status, 404);
