@@ -3,7 +3,7 @@
 Open source, self-hosted alternative to Google Classroom. One Node script, one SQLite file, one folder of uploads. No npm dependencies (Node >= 22.5). UI in English and Italian, laid out like Google Classroom (top bar, side menu with your classes, Stream / Classwork / People / Grades tabs). It copies the layout and interaction patterns, not Google's logo, illustrations or fonts.
 
 **Classes**: join codes for students and a separate code for co-teachers; leave / remove members; archive (read-only) and delete.
-**Stream**: announcements, assignments (due date, points, attachments), quizzes, materials; topics with filter; edit posts; schedule a post for later.
+**Stream**: announcements, assignments (due date, points, attachments and links), quizzes, materials, each for the whole class or only for selected students; topics with filter; edit posts; schedule a post for later.
 **Work**: students write answers, attach files, turn in / unsubmit. Quizzes are multiple choice and auto-graded (one attempt; the answer key shows after submitting).
 **Grading**: draft grades stay hidden until the teacher returns them; gradebook (students x assignments) with CSV export.
 **Talk**: class comments on every post, private comments between a student and the teachers.
@@ -38,6 +38,7 @@ Without Docker: `PORT=8788 AULA_DATA=/var/lib/aula node --no-warnings server.js`
 - No password reset: usernames are the only identity, so a forgotten password cannot be recovered yet (planned: reset by the class owner).
 - The Dockerfile has not been built in CI.
 - No email, per-user upload quota, rubrics, or import/export of a whole class.
+- Posts for selected students notify only those students; a student removed from the class stays in old audiences (harmless).
 - A scheduled post does not notify anyone when it goes live.
 - The class banner is a colour from the class id; there is no banner customisation, Meet link or Drive integration.
 - Quiz questions are single-answer multiple choice, one point each; quizzes cannot be edited after posting.
