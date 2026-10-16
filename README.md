@@ -1,11 +1,14 @@
 # Aula
 
-Open source, self-hosted alternative to Google Classroom. One Node script, one SQLite file, one folder of uploads. No npm dependencies (Node >= 22.5).
+Open source, self-hosted alternative to Google Classroom. One Node script, one SQLite file, one folder of uploads. No npm dependencies (Node >= 22.5). UI in English and Italian.
 
-- Teachers create classes and share a 6-character join code.
-- Announcements and assignments (due date, points, attachments).
-- Students write answers, attach files, turn in / unsubmit.
-- Teachers see turned-in work (drafts stay private), grade with feedback; graded work is locked.
+**Classes**: join codes for students and a separate code for co-teachers; leave / remove members; archive (read-only) and delete.
+**Stream**: announcements, assignments (due date, points, attachments), quizzes, materials; topics with filter; edit posts; schedule a post for later.
+**Work**: students write answers, attach files, turn in / unsubmit. Quizzes are multiple choice and auto-graded (one attempt; the answer key shows after submitting).
+**Grading**: draft grades stay hidden until the teacher returns them; gradebook (students x assignments) with CSV export.
+**Talk**: class comments on every post, private comments between a student and the teachers.
+**Organise**: to-do (late / to do / done), "to return" list for teachers, calendar of due dates, in-app notifications.
+**Account**: profile, password change (other sessions are signed out), logout, 30-day sessions.
 
 ```bash
 npm start        # http://127.0.0.1:8788
@@ -23,7 +26,8 @@ Put HTTPS (Caddy, nginx) in front before exposing it. API is plain JSON with `Au
 
 ## Known limits
 
-- One teacher per class (the creator), no co-teachers, no leaving/removing members.
-- No email, notifications, comments, rubrics, per-user upload quota or password reset.
+- 0.2 changed the schema and does not migrate 0.1 databases (0.1 was never released): delete `data/`.
+- No email, password reset, per-user upload quota, rubrics, or import/export of a whole class.
+- A scheduled post does not notify anyone when it goes live.
+- Quiz questions are single-answer multiple choice, one point each; quizzes cannot be edited after posting.
 - Login throttle is in memory (resets on restart).
-- English-only UI.
