@@ -182,3 +182,7 @@ a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px soli
   .crumb small { display: none; }
   .sechead h2 { font-size: 22px; }
 }
+
+.aud-list { max-height: 220px; overflow-y: auto; margin: 4px 0 8px; padding: 4px 12px; border: 1px solid var(--line); border-radius: 4px; }
+.attach.link .grow { display: flex; flex-direction: column; min-width: 0; }
+.attach small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 36ch; }

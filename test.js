@@ -170,6 +170,67 @@ test('grades csv neutralizes formulas', async () => {
   assert.match(r.body.toString(), /"'=cmd"/);
 });
 
+test('audience: a post can be limited to selected students', async () => {
+  const ids = Object.fromEntries((await ok(call(teacher, 'GET', `/api/classes/${cid}`))).people.map(p => [p.name, p.id]));
+  await ok(call(teacher, 'POST', `/api/classes/${cid}/posts`, { kind: 'assignment', title: 'X', audience: [] }), 400);
+  await ok(call(teacher, 'POST', `/api/classes/${cid}/posts`, { kind: 'assignment', title: 'X', audience: [ids.teacher] }), 400, 'teachers are not an audience');
+  await ok(call(teacher, 'POST', `/api/classes/${cid}/posts`, { kind: 'assignment', title: 'X', audience: ['nobody'] }), 400);
+  const { id: pid } = await ok(call(teacher, 'POST', `/api/classes/${cid}/posts`, { kind: 'assignment', title: 'Only Ann', due: new Date(Date.now() + 864e5).toISOString(), audience: [ids.ann] }));
+  const seen = async tok => (await ok(call(tok, 'GET', `/api/classes/${cid}`))).posts.some(p => p.id === pid);
+  assert.equal(await seen(ann), true); assert.equal(await seen(bob), false); assert.equal(await seen(teacher), true);
+  assert.equal((await ok(call(ann, 'GET', `/api/classes/${cid}`))).posts.find(p => p.id === pid).audience, undefined, 'students never see who else is assigned');
+  assert.deepEqual((await ok(call(teacher, 'GET', `/api/classes/${cid}`))).posts.find(p => p.id === pid).audience, [ids.ann]);
+  assert.equal((await ok(call(ann, 'GET', `/api/posts/${pid}`))).post.audience, undefined);
+  assert.deepEqual((await ok(call(teacher, 'GET', `/api/posts/${pid}`))).post.audience, [ids.ann]);
+  for (const [m, u, b] of [['GET', `/api/posts/${pid}`], ['PUT', `/api/posts/${pid}/submission`, { text: 'x', submit: true }], ['POST', `/api/posts/${pid}/comments`, { body: 'x' }], ['POST', `/api/posts/${pid}/private`, { body: 'x' }]])
+    await ok(call(bob, m, u, b), 404);
+  await ok(call(bob, 'POST', `/api/links`, { post: pid, url: 'https://example.org' }), 404);
+  assert.equal((await ok(call(ann, 'GET', '/api/work'))).some(w => w.id === pid), true);
+  assert.equal((await ok(call(bob, 'GET', '/api/work'))).some(w => w.id === pid), false);
+  assert.equal((await ok(call(bob, 'GET', '/api/notifications'))).items.some(n => n.data.title === 'Only Ann'), false);
+  assert.equal((await ok(call(ann, 'GET', '/api/notifications'))).items.some(n => n.data.title === 'Only Ann'), true);
+  await ok(call(teacher, 'PATCH', `/api/posts/${pid}`, { audience: [ids.ann, ids.bob] }));
+  assert.equal(await seen(bob), true);
+  await ok(call(teacher, 'PATCH', `/api/posts/${pid}`, { title: 'Renamed' })); // audience kept when not sent
+  assert.equal(await seen(bob), true);
+  await ok(call(teacher, 'PATCH', `/api/posts/${pid}`, { audience: null }));
+  assert.equal((await ok(call(teacher, 'GET', `/api/posts/${pid}`))).post.audience, undefined);
+});
+
+test('links: attached to posts and submissions, http(s) only', async () => {
+  const { id: pid } = await ok(call(teacher, 'POST', `/api/classes/${cid}/posts`, { kind: 'assignment', title: 'With links' }));
+  for (const url of ['javascript:alert(1)', 'ftp://x.org/a', 'not a url', '', 'data:text/html,hi'])
+    await ok(call(teacher, 'POST', '/api/links', { post: pid, url }), 400);
+  const l = await ok(call(teacher, 'POST', '/api/links', { post: pid, url: 'https://example.org/page?q=1', title: 'Reading' }));
+  assert.equal((await ok(call(ann, 'GET', `/api/posts/${pid}`))).files[0].url, 'https://example.org/page?q=1');
+  assert.equal((await ok(call(ann, 'POST', '/api/links', { post: pid, url: 'https://youtu.be/abc' }))).name, 'youtu.be');
+  await ok(call(teacher, 'GET', `/api/files/${l.id}`), 400, 'a link has no bytes to download');
+  await ok(call(bob, 'DELETE', `/api/files/${l.id}`), 403);
+  await ok(call(ann, 'PUT', `/api/posts/${pid}/submission`, { text: 'done', submit: true }));
+  const sub = (await ok(call(teacher, 'GET', `/api/posts/${pid}`))).submissions[0];
+  assert.equal(sub.files[0].url, 'https://youtu.be/abc');
+  await ok(call(teacher, 'POST', `/api/posts/${pid}/return`)); // nothing graded: stays editable
+  await ok(call(teacher, 'PUT', `/api/submissions/${sub.id}/grade`, { grade: null, return: true }));
+  await ok(call(ann, 'POST', '/api/links', { post: pid, url: 'https://example.org' }), 409, 'locked once returned');
+  await ok(call(teacher, 'DELETE', `/api/files/${l.id}`));
+});
+
+test('0.4 database (no audience/url columns) upgrades in place', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aula-up-'));
+  const old = new DatabaseSync(path.join(dir, 'aula.db'));
+  old.exec(`CREATE TABLE users(id TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL UNIQUE, salt TEXT NOT NULL, pw TEXT NOT NULL);
+    CREATE TABLE classes(id TEXT PRIMARY KEY, name TEXT NOT NULL, section TEXT, code TEXT NOT NULL UNIQUE, teacher_code TEXT NOT NULL UNIQUE, owner_id TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE posts(id TEXT PRIMARY KEY, class_id TEXT NOT NULL, user_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT, body TEXT NOT NULL DEFAULT '', due TEXT, points REAL, topic TEXT, publish_at TEXT, quiz TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE files(id TEXT PRIMARY KEY, name TEXT NOT NULL, size INTEGER NOT NULL, user_id TEXT NOT NULL, post_id TEXT, submission_id TEXT);
+    PRAGMA user_version=4;`);
+  old.close();
+  const s = createServer({ data: dir });
+  const check = new DatabaseSync(path.join(dir, 'aula.db'));
+  const cols = t => check.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name);
+  assert.ok(cols('posts').includes('audience') && cols('files').includes('url'));
+  check.close(); s.close(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('static files and path traversal', async () => {
   assert.equal((await call(null, 'GET', '/')).status, 200);
   assert.equal((await call(null, 'GET', '/../server.js')).status, 404);

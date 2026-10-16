@@ -1,5 +1,5 @@
 // A single post: instructions, class comments, the student's work, the teacher's grading.
-import { state, h, icon, api, safe, iso, upload, rerender, avatar, menu, attachment, field, dot, bar, KIND_ICON } from './lib.js';
+import { state, h, icon, api, safe, iso, upload, rerender, avatar, menu, attachment, field, dot, bar, audiencePicker, askLink, KIND_ICON } from './lib.js';
 import { t, short, shortDay, local } from './i18n.js';
 
 const KIND = { announcement: 'Announcement', assignment: 'Assignment', quiz: 'Quiz', material: 'Material' };
@@ -21,24 +21,28 @@ const quizForm = (pid, quiz) => {
 const quizReview = (quiz, answers) => quiz.map((x, i) => h('div', { class: 'card flat' }, h('b', {}, `${i + 1}. ${x.q}`),
   x.options.map((o, j) => h('div', { class: j === x.answer ? 'ok' : j === answers?.[i] ? 'err' : '' }, (j === answers?.[i] ? '(x) ' : '( ) ') + o + (j === x.answer ? ' ✓' : '')))));
 
-function editForm(p) {
+function editForm(p, students) {
   const title = h('input', { value: p.title || '', placeholder: t('Title') }), text = h('textarea', { rows: 3, value: p.body }), topic = h('input', { value: p.topic || '', placeholder: t('Topic (optional)') });
   const due = h('input', { type: 'datetime-local', value: local(p.due) }), pts = h('input', { type: 'number', min: 0, value: p.points ?? '' }), pub = h('input', { type: 'datetime-local', value: local(p.publish_at) });
+  const aud = audiencePicker(students, p.audience);
   return h('div', { class: 'card' }, p.kind !== 'announcement' ? title : null, text, topic, p.kind === 'assignment' || p.kind === 'quiz' ? field(t('Due'), due) : null,
-    p.kind === 'assignment' ? field(t('Points'), pts) : null, field(t('Publish later'), pub),
-    h('div', { class: 'actions' }, h('button', { class: 'pill', onclick: safe(async () => { await api('/posts/' + p.id, 'PATCH', { title: title.value, body: text.value, topic: topic.value, due: iso(due), points: pts.value === '' ? null : +pts.value, publish_at: iso(pub) }); rerender(); }) }, t('Save'))));
+    p.kind === 'assignment' ? field(t('Points'), pts) : null, field(t('Publish later'), pub), aud.el,
+    h('div', { class: 'actions' }, h('button', { class: 'pill', onclick: safe(async () => { await api('/posts/' + p.id, 'PATCH', { title: title.value, body: text.value, topic: topic.value, due: iso(due), points: pts.value === '' ? null : +pts.value, publish_at: iso(pub), audience: aud.value() }); rerender(); }) }, t('Save'))));
 }
 
 function yourWork(d, pid) {
   const p = d.post, s = d.submission, locked = !!s?.returned, late = !s?.submitted_at && p.due && p.due < new Date().toISOString();
   const text = h('textarea', { rows: 5, placeholder: t('Your answer'), value: s?.text ?? '', disabled: locked });
   const saveWork = submit => safe(async () => { await api(`/posts/${pid}/submission`, 'PUT', { text: text.value, submit }); rerender(); });
-  const pick = h('input', { type: 'file', multiple: true, hidden: true, onchange: safe(async () => { for (const f of pick.files) await upload(pid, f); rerender(); }) });
+  // attaching re-renders the page, so keep what the student has typed first (without changing turned-in state)
+  const keepText = () => api(`/posts/${pid}/submission`, 'PUT', { text: text.value, submit: !!s?.submitted_at });
+  const pick = h('input', { type: 'file', multiple: true, hidden: true, onchange: safe(async () => { await keepText(); for (const f of pick.files) await upload(pid, f); rerender(); }) });
   return h('div', { class: 'card work' },
     h('div', { class: 'row' }, h('h3', { class: 'grow' }, t('Your work')), h('small', { class: late ? 'err' : '' }, locked ? t('Returned') : s?.submitted_at ? t('Turned in') : late ? t('Missing') : t('Assigned'))),
     locked && s.grade != null ? h('p', {}, h('b', {}, t('Grade: {g}', { g: s.grade }) + (p.points != null ? ' / ' + p.points : '')), s.feedback && ' — ' + s.feedback) : null,
     text, (s?.files ?? []).map(f => attachment(f, locked ? null : rerender)),
     !locked ? h('div', {}, pick, h('button', { class: 'pill outline wide', onclick: () => pick.click() }, icon('add', 20), t('Add file')),
+      h('button', { class: 'pill outline wide', onclick: () => askLink(async l => { await keepText(); await api('/links', 'POST', { post: pid, ...l }); rerender(); }) }, icon('add', 20), t('Add link')),
       h('button', { class: 'pill wide', onclick: saveWork(true) }, s?.submitted_at ? t('Resubmit') : t('Turn in')),
       s?.submitted_at ? h('button', { class: 'text wide', onclick: saveWork(false) }, t('Unsubmit')) : h('button', { class: 'text wide', onclick: saveWork(false) }, t('Save draft'))) : null,
     h('hr'), h('b', {}, t('Private comments')), thread(s?.private ?? [], v => api(`/posts/${pid}/private`, 'POST', { body: v }), null, t('Add private comment')));
@@ -67,9 +71,9 @@ export async function postPage(pid, sub = '', classes) {
   const cls = classes.find(c => c.id === p.class_id);
   const slot = h('div');
   const titleRow = h('div', { class: 'titlerow' }, h('span', { class: 'ico big' }, icon(KIND_ICON[p.kind])), h('h1', { class: 'grow' }, p.title || t('Announcement')),
-    teacher ? menu([{ label: t('Edit'), onclick: () => slot.replaceChildren(editForm(p)) },
+    teacher ? menu([{ label: t('Edit'), onclick: () => slot.replaceChildren(editForm(p, d.students)) },
       { label: t('Delete'), danger: true, onclick: async () => { if (confirm(t('Delete this post?'))) { await api('/posts/' + pid, 'DELETE'); location.hash = '#/c/' + p.class_id; } } }]) : null);
-  const info = [h('p', { class: 'by' }, dot([p.author, shortDay(p.created_at), p.topic])),
+  const info = [h('p', { class: 'by' }, dot([p.author, shortDay(p.created_at), p.topic, teacher && p.audience && t(p.audience.length === 1 ? 'For {n} student' : 'For {n} students', { n: p.audience.length })])),
     h('p', { class: 'by strong' }, bar([p.points != null && t('{n} points', { n: p.points }), p.due && t('Due: {d}', { d: short(p.due) })]))];
   const instructions = h('div', {}, titleRow, info, slot, h('hr'), p.body ? h('p', { class: 'pre' }, p.body) : null, d.files.length ? h('div', { class: 'attachments' }, d.files.map(f => attachment(f))) : null,
     p.kind === 'quiz' && !teacher ? (d.submission?.submitted_at
