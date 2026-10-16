@@ -7,6 +7,8 @@ import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { createServer } from './server.js';
 
+// random per run: no credential-looking literals in the repo
+const PW = crypto.randomBytes(9).toString('hex'), PW2 = PW + '2';
 const data = fs.mkdtempSync(path.join(os.tmpdir(), 'aula-'));
 const server = createServer({ data, maxUpload: 1000 });
 let base;
@@ -21,7 +23,7 @@ const call = async (token, method, url, body, raw) => {
   const type = r.headers.get('content-type') || '';
   return { status: r.status, body: type.includes('json') ? await r.json() : Buffer.from(await r.arrayBuffer()), type };
 };
-const signup = async name => (await call(null, 'POST', '/api/register', { name, username: name.replace(/\W/g, ''), password: 'password1' })).body.token;
+const signup = async name => (await call(null, 'POST', '/api/register', { name, username: name.replace(/\W/g, ''), password: PW })).body.token;
 const ok = async (p, status = 200) => { const r = await p; assert.equal(r.status, status, JSON.stringify(r.body)); return r.body; };
 
 let teacher, ann, bob, cid, codes;
@@ -37,13 +39,13 @@ before(async () => {
 
 test('auth: unauthenticated, wrong password, logout, password change', async () => {
   await ok(call(null, 'GET', '/api/classes'), 401);
-  await ok(call(null, 'POST', '/api/login', { username: 'ann', password: 'nope' }), 401);
-  const t = (await ok(call(null, 'POST', '/api/login', { username: 'bob', password: 'password1' }))).token;
+  await ok(call(null, 'POST', '/api/login', { username: 'ann', password: 'x' + PW }), 401);
+  const t = (await ok(call(null, 'POST', '/api/login', { username: 'bob', password: PW }))).token;
   await ok(call(t, 'POST', '/api/logout'));
   await ok(call(t, 'GET', '/api/me'), 401);
-  const c = await signup('carl'), c2 = (await ok(call(null, 'POST', '/api/login', { username: 'carl', password: 'password1' }))).token;
-  await ok(call(c, 'POST', '/api/password', { old: 'wrongwrong', new: 'password2' }), 403);
-  await ok(call(c, 'POST', '/api/password', { old: 'password1', new: 'password2' }));
+  const c = await signup('carl'), c2 = (await ok(call(null, 'POST', '/api/login', { username: 'carl', password: PW }))).token;
+  await ok(call(c, 'POST', '/api/password', { old: 'x' + PW, new: PW2 }), 403);
+  await ok(call(c, 'POST', '/api/password', { old: PW, new: PW2 }));
   await ok(call(c2, 'GET', '/api/me'), 401); // other sessions die
   await ok(call(c, 'GET', '/api/me'));
   await ok(call(c, 'PUT', '/api/me', { name: 'Carlo' }));
@@ -51,10 +53,10 @@ test('auth: unauthenticated, wrong password, logout, password change', async () 
 });
 
 test('usernames: validated, unique, case-insensitive', async () => {
-  const reg = username => call(null, 'POST', '/api/register', { name: 'X', username, password: 'password1' });
+  const reg = username => call(null, 'POST', '/api/register', { name: 'X', username, password: PW });
   await ok(reg('no'), 400); await ok(reg('has space'), 400); await ok(reg('bad@mail.com'), 400);
   await ok(reg('Zed_1')); await ok(reg('zed_1'), 409);
-  await ok(call(null, 'POST', '/api/login', { username: 'ZED_1', password: 'password1' }));
+  await ok(call(null, 'POST', '/api/login', { username: 'ZED_1', password: PW }));
 });
 
 test('membership: codes, roles, co-teacher, leave/remove, owner rules', async () => {
@@ -175,11 +177,11 @@ test('0.2 database (email column) migrates; old email still logs in as username'
   const old = new DatabaseSync(path.join(dir, 'aula.db'));
   const salt = 'ab'.repeat(16);
   old.exec(`CREATE TABLE users(id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, salt TEXT NOT NULL, pw TEXT NOT NULL); PRAGMA user_version=2;`);
-  old.prepare('INSERT INTO users VALUES(?,?,?,?,?)').run('u1', 'Old', 'old@x.org', salt, crypto.scryptSync('password1', salt, 64).toString('hex'));
+  old.prepare('INSERT INTO users VALUES(?,?,?,?,?)').run('u1', 'Old', 'old@x.org', salt, crypto.scryptSync(PW, salt, 64).toString('hex'));
   old.close();
   const s = createServer({ data: dir });
   await new Promise(r => s.listen(0, '127.0.0.1', r));
-  const r = await fetch(`http://127.0.0.1:${s.address().port}/api/login`, { method: 'POST', body: JSON.stringify({ username: 'old@x.org', password: 'password1' }) });
+  const r = await fetch(`http://127.0.0.1:${s.address().port}/api/login`, { method: 'POST', body: JSON.stringify({ username: 'old@x.org', password: PW }) });
   assert.equal(r.status, 200);
   s.close(); fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -201,7 +203,7 @@ test('password reset: only for students that belong solely to your classes', asy
   const r = await ok(call(teacher, 'POST', `/api/classes/${mine}/members/${id('zoe')}/reset`));
   assert.equal(r.username, 'zoe');
   await ok(call(zoe, 'GET', '/api/me'), 401, 'old session dies');
-  await ok(call(null, 'POST', '/api/login', { username: 'zoe', password: 'password1' }), 401);
+  await ok(call(null, 'POST', '/api/login', { username: 'zoe', password: PW }), 401);
   await ok(call(null, 'POST', '/api/login', { username: 'zoe', password: r.password }));
 });
 
@@ -210,7 +212,7 @@ test('operator reset by username', async () => {
   const s = createServer({ data: dir });
   await new Promise(r => s.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${s.address().port}/api/`;
-  await fetch(url + 'register', { method: 'POST', body: JSON.stringify({ name: 'Op', username: 'oper', password: 'password1' }) });
+  await fetch(url + 'register', { method: 'POST', body: JSON.stringify({ name: 'Op', username: 'oper', password: PW }) });
   const pw = s.resetPassword('OPER');
   assert.equal((await fetch(url + 'login', { method: 'POST', body: JSON.stringify({ username: 'oper', password: pw }) })).status, 200);
   assert.equal(s.resetPassword('nobody'), null);
