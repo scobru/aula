@@ -1,6 +1,6 @@
 # Aula
 
-Open source, self-hosted alternative to Google Classroom. One Node script, one SQLite file, one folder of uploads. No npm dependencies (Node >= 22.5). UI in English and Italian.
+Open source, self-hosted alternative to Google Classroom. One Node script, one SQLite file, one folder of uploads. No npm dependencies (Node >= 22.5). UI in English and Italian, laid out like Google Classroom (top bar, side menu with your classes, Stream / Classwork / People / Grades tabs). It copies the layout and interaction patterns, not Google's logo, illustrations or fonts.
 
 **Classes**: join codes for students and a separate code for co-teachers; leave / remove members; archive (read-only) and delete.
 **Stream**: announcements, assignments (due date, points, attachments), quizzes, materials; topics with filter; edit posts; schedule a post for later.
@@ -39,5 +39,6 @@ Without Docker: `PORT=8788 AULA_DATA=/var/lib/aula node --no-warnings server.js`
 - The Dockerfile has not been built in CI.
 - No email, per-user upload quota, rubrics, or import/export of a whole class.
 - A scheduled post does not notify anyone when it goes live.
+- The class banner is a colour from the class id; there is no banner customisation, Meet link or Drive integration.
 - Quiz questions are single-answer multiple choice, one point each; quizzes cannot be edited after posting.
 - Login throttle is in memory (resets on restart).

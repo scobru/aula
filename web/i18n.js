@@ -1,7 +1,7 @@
 // English text is the key; a missing Italian entry falls back to English.
 const IT = {
   // shell
-  'Classes': 'Classi', 'Work': 'Compiti', 'Calendar': 'Calendario', 'Notifications': 'Notifiche', 'Log out': 'Esci', 'Home': 'Home',
+  'Classes': 'Classi', 'Work': 'Compiti', 'Calendar': 'Calendario', 'Notifications': 'Notifiche', 'Log out': 'Esci', 'Home': 'Home page',
   'Name': 'Nome', 'Username': 'Nome utente', 'Password (min 8 characters)': 'Password (min 8 caratteri)', 'Create account': 'Crea account', 'Log in': 'Accedi',
   'Have an account? Log in': 'Hai un account? Accedi', 'New here? Register': 'Nuovo? Registrati',
   // home
@@ -16,7 +16,7 @@ const IT = {
   // profile
   'Profile': 'Profilo', 'Save': 'Salva', 'Change password': 'Cambia password', 'Current password': 'Password attuale', 'New password (min 8 characters)': 'Nuova password (min 8 caratteri)', 'Password changed': 'Password cambiata',
   // class
-  '(archived)': '(archiviata)', 'Stream': 'Bacheca', 'People': 'Persone', 'Grades': 'Voti', 'Settings': 'Impostazioni',
+  '(archived)': '(archiviata)', 'Stream': 'Stream', 'People': 'Persone', 'Grades': 'Voti', 'Settings': 'Impostazioni',
   'Announcement': 'Annuncio', 'Assignment': 'Compito', 'Quiz': 'Quiz', 'Material': 'Materiale', 'Type': 'Tipo', 'Title': 'Titolo', 'Text': 'Testo',
   'Topic (optional)': 'Argomento (facoltativo)', 'Topic': 'Argomento', 'All topics': 'Tutti gli argomenti', 'Due': 'Scadenza', 'Points': 'Punti', 'Publish later': 'Pubblica più tardi', 'Post': 'Pubblica',
   'Question': 'Domanda', 'Options, one per line': 'Opzioni, una per riga', 'Correct option number': 'Numero dell\'opzione corretta', 'Add question': 'Aggiungi domanda', 'Remove': 'Rimuovi',
@@ -30,10 +30,20 @@ const IT = {
   'Delete class': 'Elimina classe', 'Delete this class and everything in it?': 'Eliminare questa classe e tutto il suo contenuto?',
   // post
   'Write a comment': 'Scrivi un commento', 'Send': 'Invia', 'Submit your answers? You can only do this once.': 'Inviare le risposte? Si può fare una sola volta.', 'Submit answers': 'Invia risposte',
-  'Edit': 'Modifica', 'Delete': 'Elimina', 'Delete this post?': 'Eliminare questo post?', '< Back to class': '< Torna alla classe', 'Class comments': 'Commenti della classe', 'Private comments': 'Commenti privati',
+  'Edit': 'Modifica', 'Delete': 'Elimina', 'Delete this post?': 'Eliminare questo post?', '< Back to class': '< Torna alla classe', 'Class comments': 'Commenti sul corso', 'Private comments': 'Commenti privati',
   'Your work': 'Il tuo lavoro', 'Your answer': 'La tua risposta', 'turned in {d}': 'consegnato il {d}', 'not turned in': 'non consegnato', 'Resubmit': 'Consegna di nuovo', 'Turn in': 'Consegna',
   'Unsubmit': 'Ritira consegna', 'Save draft': 'Salva bozza', 'Grade': 'Voto', 'Feedback': 'Feedback', 'Returned': 'Restituito', '(late)': '(in ritardo)',
   'Submissions ({n})': 'Consegne ({n})', 'Return all graded': 'Restituisci tutti i valutati', '{n} returned': '{n} restituiti', 'Nothing turned in yet.': 'Nessuna consegna.', 'Download failed': 'Download non riuscito',
+  // classroom layout
+  'Classwork': 'Lavori del corso', 'Teaching': 'Corsi di cui sei insegnante', 'Enrolled': 'Corsi a cui sei iscritto', 'To review': 'Da correggere', 'To do': 'Da fare', 'Archived classes': 'Corsi archiviati',
+  'Menu': 'Menu', 'Account': 'Account', 'Class code': 'Codice del corso', 'Join class': 'Iscriviti al corso', 'Join': 'Iscriviti', 'Section': 'Sezione', 'Create class': 'Crea corso', 'Create': 'Crea', 'Add': 'Aggiungi',
+  'No archived classes.': 'Nessun corso archiviato.', 'Due: {d}': 'Consegna: {d}', 'Missing': 'Mancanti', 'Assigned': 'Assegnati',
+  '{name} posted a new assignment: {title}': '{name} ha pubblicato un nuovo compito: {title}', '{name} posted a new quiz: {title}': '{name} ha pubblicato un nuovo quiz: {title}', '{name} posted new material: {title}': '{name} ha pubblicato un nuovo materiale: {title}',
+  'Copy': 'Copia', 'Due soon': 'In consegna', 'Due {d}': 'Scadenza {d}', 'No work due soon': 'Nessun lavoro in consegna a breve', 'View all': 'Visualizza tutto', 'Announce something to your class': 'Annuncia qualcosa alla classe',
+  'Scheduled for {d}': 'Programmato per {d}', '{n} class comments': '{n} commenti sul corso', 'Add class comment': 'Aggiungi commento', 'Nothing posted yet.': 'Ancora nessun contenuto.', 'Cancel': 'Annulla',
+  'Instructions (optional)': 'Istruzioni (facoltative)', 'Filter by topic': 'Filtro per argomento', 'Turned in': 'Consegnato', 'Scheduled: {d}': 'Programmato: {d}', 'Posted: {d}': 'Pubblicazione: {d}',
+  'No classwork yet.': 'Ancora nessun lavoro.', 'Collapse all': 'Comprimi tutto', 'Teachers': 'Insegnanti', 'Students': 'Studenti', '{n} students': '{n} studenti', '{n} student': '{n} studente', 'Add file': 'Aggiungi file',
+  'Add private comment': 'Aggiungi commento privato', 'Turned in {d}': 'Consegnato il {d}', 'Draft': 'Bozza', '{n} points': '{n} punti', 'Instructions': 'Istruzioni', 'Student work': 'Lavori degli studenti',
   // server messages
   'Not found': 'Non trovato', 'Teachers only': 'Solo per i docenti', 'Login required': 'Accesso richiesto', 'Invalid username or password': 'Nome utente o password errati',
   'Too many attempts, try again later': 'Troppi tentativi, riprova più tardi', 'Registration is closed': 'Le registrazioni sono chiuse', 'Username already taken': 'Nome utente già in uso',
@@ -57,10 +67,12 @@ const t = (s, vars) => {
   for (const k in vars) r = r.replaceAll('{' + k + '}', vars[k]);
   return r;
 };
-const stamp = (iso, opts) => new Date(iso).toLocaleString(lang, opts);
+const fmt = (iso, opts) => new Date(iso).toLocaleString(lang, opts);
+const short = iso => fmt(iso, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const shortDay = iso => fmt(iso, { day: 'numeric', month: 'short' });
 const day = iso => new Date(iso).toLocaleDateString(lang, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 // ISO -> value for <input type=datetime-local>
 const local = iso => { if (!iso) return ''; const d = new Date(iso); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
 
 // `lang` is a live binding, so importers always see the current language
-export { lang, set as setLang, t, stamp as when, day, local, IT };
+export { lang, set as setLang, t, short, shortDay, day, local, IT };
