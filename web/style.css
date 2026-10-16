@@ -186,3 +186,13 @@ a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px soli
 .aud-list { max-height: 220px; overflow-y: auto; margin: 4px 0 8px; padding: 4px 12px; border: 1px solid var(--line); border-radius: 4px; }
 .attach.link .grow { display: flex; flex-direction: column; min-width: 0; }
 .attach small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 36ch; }
+
+.topic-head { display: flex; align-items: center; gap: 4px; padding: 16px 8px 8px; border-bottom: 1px solid var(--line); }
+.topic-head h2 { flex: 1; font-size: 24px; }
+.topic-body[hidden] { display: none; }
+.icon-btn.shut svg { transform: rotate(180deg); }
+.topic + .topic { margin-top: 8px; }
+.person.tools { padding: 8px; color: var(--muted); }
+.person input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); }
+.pill.off { opacity: .45; cursor: default; pointer-events: none; }
+.sechead .icon-btn { color: var(--accent); }

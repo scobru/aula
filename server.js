@@ -101,13 +101,20 @@ export function createServer({
     CREATE TABLE IF NOT EXISTS posts(id TEXT PRIMARY KEY, class_id TEXT NOT NULL REFERENCES classes(id) ON DELETE CASCADE, user_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT, body TEXT NOT NULL DEFAULT '', due TEXT, points REAL, topic TEXT, publish_at TEXT, quiz TEXT, audience TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS submissions(id TEXT PRIMARY KEY, post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', submitted_at TEXT, grade REAL, feedback TEXT, returned INTEGER NOT NULL DEFAULT 0, UNIQUE(post_id, user_id));
     CREATE TABLE IF NOT EXISTS files(id TEXT PRIMARY KEY, name TEXT NOT NULL, size INTEGER NOT NULL, user_id TEXT NOT NULL, post_id TEXT REFERENCES posts(id) ON DELETE CASCADE, submission_id TEXT REFERENCES submissions(id) ON DELETE CASCADE, url TEXT);
+    CREATE TABLE IF NOT EXISTS topics(class_id TEXT NOT NULL REFERENCES classes(id) ON DELETE CASCADE, name TEXT NOT NULL COLLATE NOCASE, position INTEGER NOT NULL, PRIMARY KEY(class_id, name));
     CREATE TABLE IF NOT EXISTS comments(id TEXT PRIMARY KEY, post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, body TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS private_comments(id TEXT PRIMARY KEY, submission_id TEXT NOT NULL REFERENCES submissions(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, body TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS notifications(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, data TEXT NOT NULL, link TEXT, created_at TEXT NOT NULL, read INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS posts_class ON posts(class_id);
     CREATE INDEX IF NOT EXISTS subs_post ON submissions(post_id);
     CREATE INDEX IF NOT EXISTS notif_user ON notifications(user_id, created_at);
-    PRAGMA user_version=5;
+    PRAGMA user_version=6;
+    -- topics used to be only a string on each post: give existing ones a row (in order of first use) and one canonical spelling
+    INSERT OR IGNORE INTO topics(class_id, name, position)
+      SELECT class_id, topic, ROW_NUMBER() OVER (PARTITION BY class_id ORDER BY MIN(created_at)) - 1 FROM posts WHERE topic IS NOT NULL GROUP BY class_id, topic;
+    UPDATE posts SET topic=(SELECT t.name FROM topics t WHERE t.class_id=posts.class_id AND t.name=posts.topic)
+      WHERE topic IS NOT NULL AND EXISTS (SELECT 1 FROM topics t WHERE t.class_id=posts.class_id AND t.name=posts.topic)
+        AND topic IS NOT (SELECT t.name FROM topics t WHERE t.class_id=posts.class_id AND t.name=posts.topic);
   `);
   // columns added after 0.2; tables are created above, so this also upgrades older files in place
   for (const [table, col, type] of [['classes', 'section', 'TEXT'], ['posts', 'audience', 'TEXT'], ['files', 'url', 'TEXT']])
@@ -138,6 +145,15 @@ export function createServer({
     return JSON.stringify(ids);
   }
   const recipients = (cid, audience) => audience ? JSON.parse(audience) : members(cid, 'student');
+  // topics: an ordered list per class; posts carry the topic name, matched case-insensitively
+  const topicOf = (cid, name) => (name ? one('SELECT name FROM topics WHERE class_id=? AND name=?', cid, name)?.name : undefined);
+  function ensureTopic(cid, name) {
+    if (!name) return null;
+    const have = topicOf(cid, name);
+    if (have) return have;
+    run('INSERT INTO topics(class_id, name, position) VALUES(?,?,(SELECT COALESCE(MAX(position), -1) + 1 FROM topics WHERE class_id=?))', cid, name, cid);
+    return name;
+  }
   const filesOf = (col, v) => q(`SELECT id, name, size, url FROM files WHERE ${col}=?`, v);
   const mySubmission = (pid, uid) => one('SELECT * FROM submissions WHERE post_id=? AND user_id=?', pid, uid);
   const members = (cid, role) => q('SELECT user_id FROM members WHERE class_id=?' + (role ? ' AND role=?' : ''), ...(role ? [cid, role] : [cid])).map(r => r.user_id);
@@ -264,7 +280,51 @@ export function createServer({
         mine: !teacher && (p.kind === 'assignment' || p.kind === 'quiz')
           ? one('SELECT submitted_at, returned, CASE WHEN returned=1 THEN grade END grade FROM submissions WHERE post_id=? AND user_id=?', p.id, user.id) ?? null : undefined,
       }));
-    return { class: cls, role, people, posts };
+    // students only learn topic names that hold something they can see
+    const used = new Set(posts.map(p => p.topic).filter(Boolean));
+    const topics = q('SELECT name FROM topics WHERE class_id=? ORDER BY position, name', cid).map(r => r.name).filter(n => teacher || used.has(n));
+    return { class: cls, role, people, posts, topics };
+  });
+
+  route('POST', '/api/classes/:id/topics', async ({ user, params: [cid], json }) => {
+    needRole(cid, user.id, 'teacher', true);
+    const name = str((await json()).name).slice(0, 60);
+    if (!name) bad('Topic name required');
+    return { name: ensureTopic(cid, name) };
+  });
+
+  route('PATCH', '/api/classes/:id/topics', async ({ user, params: [cid], json }) => {
+    needRole(cid, user.id, 'teacher', true);
+    const b = await json(), from = topicOf(cid, str(b.from)), to = str(b.to).slice(0, 60);
+    if (!from) bad('Not found', 404);
+    if (!to) bad('Topic name required');
+    const other = topicOf(cid, to);
+    if (other && other.toLowerCase() !== from.toLowerCase()) bad('A topic with that name already exists', 409);
+    tx(() => {
+      run('UPDATE topics SET name=? WHERE class_id=? AND name=?', to, cid, from);
+      run('UPDATE posts SET topic=? WHERE class_id=? AND topic=? COLLATE NOCASE', to, cid, from);
+    });
+  });
+
+  // its posts stay, they just lose the topic
+  route('DELETE', '/api/classes/:id/topics', ({ user, params: [cid], url }) => {
+    needRole(cid, user.id, 'teacher', true);
+    const name = topicOf(cid, str(url.searchParams.get('name')));
+    if (!name) bad('Not found', 404);
+    tx(() => {
+      run('UPDATE posts SET topic=NULL WHERE class_id=? AND topic=? COLLATE NOCASE', cid, name);
+      run('DELETE FROM topics WHERE class_id=? AND name=?', cid, name);
+    });
+  });
+
+  // names the client lists go first, in that order; topics it did not list (added meanwhile) keep their order after them
+  route('PUT', '/api/classes/:id/topics/order', async ({ user, params: [cid], json }) => {
+    needRole(cid, user.id, 'teacher', true);
+    const b = await json();
+    if (!Array.isArray(b.names)) bad('names must be a list');
+    const first = [...new Set(b.names.map(x => topicOf(cid, str(x))).filter(Boolean))];
+    const rest = q('SELECT name FROM topics WHERE class_id=? ORDER BY position, name', cid).map(r => r.name).filter(n => !first.includes(n));
+    tx(() => [...first, ...rest].forEach((n, i) => run('UPDATE topics SET position=? WHERE class_id=? AND name=?', i, cid, n)));
   });
 
   route('PATCH', '/api/classes/:id', async ({ user, params: [cid], json }) => {
@@ -348,6 +408,7 @@ export function createServer({
     const f = postFields(kind, b), quiz = kind === 'quiz' ? parseQuiz(b.quiz) : null;
     if (quiz) f.points = quiz.length;
     const audience = parseAudience(cid, b.audience), pid = id();
+    f.topic = ensureTopic(cid, f.topic);
     run('INSERT INTO posts(id, class_id, user_id, kind, title, body, due, points, topic, publish_at, quiz, audience, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
       pid, cid, user.id, kind, f.title, f.body, f.due, f.points, f.topic, f.publish_at, quiz && JSON.stringify(quiz), audience, now());
     if (!f.publish_at || f.publish_at <= now()) notify(recipients(cid, audience), 'post', { class: getClass(cid).name, title: postTitle(f) }, '#/p/' + pid);
@@ -360,6 +421,7 @@ export function createServer({
     const b = await json(), f = postFields(p.kind, { title: p.title, body: p.body, due: p.due, points: p.points, topic: p.topic, publish_at: p.publish_at, ...b });
     if (p.kind === 'quiz') f.points = p.points; // quiz points = question count, fixed
     const audience = 'audience' in b ? parseAudience(p.class_id, b.audience) : p.audience;
+    f.topic = ensureTopic(p.class_id, f.topic);
     run('UPDATE posts SET title=?, body=?, due=?, points=?, topic=?, publish_at=?, audience=? WHERE id=?', f.title, f.body, f.due, f.points, f.topic, f.publish_at, audience, pid);
   });
 

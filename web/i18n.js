@@ -48,6 +48,14 @@ const IT = {
   'For': 'Per', 'All students': 'Tutti gli studenti', 'Selected students': 'Studenti selezionati', 'For {n} student': 'Per {n} studente', 'For {n} students': 'Per {n} studenti',
   'Add link': 'Aggiungi link', 'Title (optional)': 'Titolo (facoltativo)',
   'Choose at least one student of this class': 'Scegli almeno uno studente di questa classe', 'Enter a full link, like https://example.org': 'Inserisci un link completo, ad esempio https://example.org', 'Not a file': 'Non è un file',
+  // topics and people
+  'Create topic': 'Crea argomento', 'Rename topic': 'Rinomina argomento', 'Topic name': 'Nome argomento', 'Rename': 'Rinomina', 'Move up': 'Sposta su', 'Move down': 'Sposta giù',
+  'Delete the topic "{name}"? Its posts stay in Classwork without a topic.': 'Eliminare l\'argomento "{name}"? I suoi contenuti restano in Lavori del corso senza argomento.', 'Nothing here yet.': 'Ancora niente qui.',
+  'Invite teachers': 'Invita insegnanti', 'Invite students': 'Invita studenti', 'Share this code, or send the link': 'Condividi questo codice, oppure invia il link', 'Copy link': 'Copia link',
+  'Actions': 'Azioni', 'Select all': 'Seleziona tutto', 'Remove {n} students from the class?': 'Rimuovere {n} studenti dal corso?',
+  'Reset the password of {n} students? They will be signed out everywhere.': 'Reimpostare la password di {n} studenti? Verranno disconnessi da ovunque.', 'Temporary passwords (shown only once):': 'Password temporanee (mostrate una sola volta):',
+  'Joining…': 'Iscrizione in corso…',
+  'Topic name required': 'Nome dell\'argomento obbligatorio', 'A topic with that name already exists': 'Esiste già un argomento con questo nome', 'names must be a list': 'Elenco non valido',
   // server messages
   'Not found': 'Non trovato', 'Teachers only': 'Solo per i docenti', 'Login required': 'Accesso richiesto', 'Invalid username or password': 'Nome utente o password errati',
   'Too many attempts, try again later': 'Troppi tentativi, riprova più tardi', 'Registration is closed': 'Le registrazioni sono chiuse', 'Username already taken': 'Nome utente già in uso',
