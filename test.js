@@ -30,11 +30,14 @@ let teacher, ann, bob, cid, codes;
 before(async () => {
   await new Promise(r => server.listen(0, '127.0.0.1', () => { base = `http://127.0.0.1:${server.address().port}`; r(); }));
   [teacher, ann, bob] = [await signup('teacher'), await signup('ann'), await signup('bob')];
-  const c = await ok(call(teacher, 'POST', '/api/classes', { name: 'Math' }));
+  const c = await ok(call(teacher, 'POST', '/api/classes', { name: 'Math', section: '5B 2026/7' }));
   cid = c.id;
   codes = (await ok(call(teacher, 'GET', `/api/classes/${cid}`))).class;
   await ok(call(ann, 'POST', '/api/join', { code: codes.code.toLowerCase() }));
   await ok(call(bob, 'POST', '/api/join', { code: codes.code }));
+  assert.equal(codes.section, '5B 2026/7');
+  await ok(call(teacher, 'PATCH', `/api/classes/${cid}`, { section: '5B 2026/27' }));
+  assert.equal((await ok(call(ann, 'GET', '/api/classes'))).find(x => x.id === cid).section, '5B 2026/27');
 });
 
 test('auth: unauthenticated, wrong password, logout, password change', async () => {
@@ -175,6 +178,7 @@ test('static files and path traversal', async () => {
 test('0.2 database (email column) migrates; old email still logs in as username', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aula-mig-'));
   const old = new DatabaseSync(path.join(dir, 'aula.db'));
+  old.exec('CREATE TABLE classes(id TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT NOT NULL UNIQUE, teacher_code TEXT NOT NULL UNIQUE, owner_id TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0)');
   const salt = 'ab'.repeat(16);
   old.exec(`CREATE TABLE users(id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, salt TEXT NOT NULL, pw TEXT NOT NULL); PRAGMA user_version=2;`);
   old.prepare('INSERT INTO users VALUES(?,?,?,?,?)').run('u1', 'Old', 'old@x.org', salt, crypto.scryptSync(PW, salt, 64).toString('hex'));
