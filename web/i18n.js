@@ -44,6 +44,10 @@ const IT = {
   'Instructions (optional)': 'Istruzioni (facoltative)', 'Filter by topic': 'Filtro per argomento', 'Turned in': 'Consegnato', 'Scheduled: {d}': 'Programmato: {d}', 'Posted: {d}': 'Pubblicazione: {d}',
   'No classwork yet.': 'Ancora nessun lavoro.', 'Collapse all': 'Comprimi tutto', 'Teachers': 'Insegnanti', 'Students': 'Studenti', '{n} students': '{n} studenti', '{n} student': '{n} studente', 'Add file': 'Aggiungi file',
   'Add private comment': 'Aggiungi commento privato', 'Turned in {d}': 'Consegnato il {d}', 'Draft': 'Bozza', '{n} points': '{n} punti', 'Instructions': 'Istruzioni', 'Student work': 'Lavori degli studenti',
+  // audience and links
+  'For': 'Per', 'All students': 'Tutti gli studenti', 'Selected students': 'Studenti selezionati', 'For {n} student': 'Per {n} studente', 'For {n} students': 'Per {n} studenti',
+  'Add link': 'Aggiungi link', 'Title (optional)': 'Titolo (facoltativo)',
+  'Choose at least one student of this class': 'Scegli almeno uno studente di questa classe', 'Enter a full link, like https://example.org': 'Inserisci un link completo, ad esempio https://example.org', 'Not a file': 'Non è un file',
   // server messages
   'Not found': 'Non trovato', 'Teachers only': 'Solo per i docenti', 'Login required': 'Accesso richiesto', 'Invalid username or password': 'Nome utente o password errati',
   'Too many attempts, try again later': 'Troppi tentativi, riprova più tardi', 'Registration is closed': 'Le registrazioni sono chiuse', 'Username already taken': 'Nome utente già in uso',

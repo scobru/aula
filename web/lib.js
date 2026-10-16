@@ -102,11 +102,40 @@ export function modal(title, body, label, onSubmit) {
   d.showModal();
 }
 
-export const attachment = (f, onDelete) => h('div', { class: 'attach' },
-  h('a', { href: '#', onclick: e => { e.preventDefault(); save('/files/' + f.id, f.name); } }, h('b', {}, f.name), h('small', {}, `${Math.ceil(f.size / 1024)} KB`)),
+export const attachment = (f, onDelete) => h('div', { class: 'attach' + (f.url ? ' link' : '') },
+  f.url ? h('a', { href: f.url, target: '_blank', rel: 'noopener noreferrer' }, h('b', {}, f.name), h('small', {}, f.url.replace(/^https?:\/\//, '')))
+    : h('a', { href: '#', onclick: e => { e.preventDefault(); save('/files/' + f.id, f.name); } }, h('b', {}, f.name), h('small', {}, `${Math.ceil(f.size / 1024)} KB`)),
   onDelete && h('button', { class: 'icon-btn', 'aria-label': t('Remove'), onclick: safe(async () => { await api('/files/' + f.id, 'DELETE'); onDelete(); }) }, '×'));
 
 export const field = (label, input) => h('label', { class: 'f' }, label, input);
 export const dot = parts => parts.filter(Boolean).join(' • ');
 export const bar = parts => parts.filter(Boolean).join(' | ');
 export const KIND_ICON = { announcement: 'announcement', assignment: 'assignment', quiz: 'quiz', material: 'material' };
+
+// "all students" or a hand-picked list; value() is null or an array of ids
+export function audiencePicker(students, selected) {
+  const boxes = students.map(s => ({ s, box: h('input', { type: 'checkbox', checked: !selected || selected.includes(s.id) }) }));
+  const list = h('div', { class: 'aud-list', hidden: !selected }, boxes.map(({ s, box }) => h('label', { class: 'opt' }, box, ' ' + s.name)));
+  const mode = h('select', { 'aria-label': t('For') }, h('option', { value: 'all', selected: !selected }, t('All students')), h('option', { value: 'some', selected: !!selected }, t('Selected students')));
+  mode.onchange = () => { list.hidden = mode.value === 'all'; };
+  return {
+    el: students.length ? h('div', { class: 'aud' }, field(t('For'), mode), list) : null,
+    value: () => (mode.value === 'all' ? null : boxes.filter(x => x.box.checked).map(x => x.s.id)),
+  };
+}
+
+export function askLink(onAdd) {
+  const url = h('input', { type: 'url', placeholder: 'https://', required: true }), title = h('input', { placeholder: t('Title (optional)') });
+  modal(t('Add link'), [url, title], t('Add'), () => onAdd({ url: url.value, title: title.value }));
+}
+
+// links collected in a composer; saved by the caller once the post exists
+export function linkAdder() {
+  const links = [], box = h('div');
+  const draw = () => box.replaceChildren(...links.map((l, i) => h('div', { class: 'attach link' }, h('span', { class: 'grow' }, h('b', {}, l.title || l.url), h('small', {}, l.url)),
+    h('button', { type: 'button', class: 'icon-btn', 'aria-label': t('Remove'), onclick: () => { links.splice(i, 1); draw(); } }, '×'))));
+  return {
+    el: h('div', {}, box, h('button', { type: 'button', class: 'text', onclick: () => askLink(l => { links.push(l); draw(); }) }, t('Add link'))),
+    save: async postId => { for (const l of links) await api('/links', 'POST', { post: postId, ...l }); },
+  };
+}

@@ -92,24 +92,26 @@ export function createServer({
   const existing = one("SELECT 1 x FROM sqlite_master WHERE name='users'"), version = one('PRAGMA user_version').user_version;
   if (existing && version < 2) throw new Error(`${data}/aula.db is a 0.1 database; the schema changed, delete it (no migration, 0.1 was never released)`);
   if (existing && version === 2) db.exec('ALTER TABLE users RENAME COLUMN email TO username'); // 0.2 -> 0.3: old emails keep working as usernames at login
-  if (existing && version <= 3) db.exec('ALTER TABLE classes ADD COLUMN section TEXT'); // 0.3 -> 0.4
   db.exec(`
     PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
     CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL UNIQUE, salt TEXT NOT NULL, pw TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS classes(id TEXT PRIMARY KEY, name TEXT NOT NULL, section TEXT, code TEXT NOT NULL UNIQUE, teacher_code TEXT NOT NULL UNIQUE, owner_id TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS members(class_id TEXT NOT NULL REFERENCES classes(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('teacher','student')), PRIMARY KEY(class_id, user_id));
-    CREATE TABLE IF NOT EXISTS posts(id TEXT PRIMARY KEY, class_id TEXT NOT NULL REFERENCES classes(id) ON DELETE CASCADE, user_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT, body TEXT NOT NULL DEFAULT '', due TEXT, points REAL, topic TEXT, publish_at TEXT, quiz TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS posts(id TEXT PRIMARY KEY, class_id TEXT NOT NULL REFERENCES classes(id) ON DELETE CASCADE, user_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT, body TEXT NOT NULL DEFAULT '', due TEXT, points REAL, topic TEXT, publish_at TEXT, quiz TEXT, audience TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS submissions(id TEXT PRIMARY KEY, post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', submitted_at TEXT, grade REAL, feedback TEXT, returned INTEGER NOT NULL DEFAULT 0, UNIQUE(post_id, user_id));
-    CREATE TABLE IF NOT EXISTS files(id TEXT PRIMARY KEY, name TEXT NOT NULL, size INTEGER NOT NULL, user_id TEXT NOT NULL, post_id TEXT REFERENCES posts(id) ON DELETE CASCADE, submission_id TEXT REFERENCES submissions(id) ON DELETE CASCADE);
+    CREATE TABLE IF NOT EXISTS files(id TEXT PRIMARY KEY, name TEXT NOT NULL, size INTEGER NOT NULL, user_id TEXT NOT NULL, post_id TEXT REFERENCES posts(id) ON DELETE CASCADE, submission_id TEXT REFERENCES submissions(id) ON DELETE CASCADE, url TEXT);
     CREATE TABLE IF NOT EXISTS comments(id TEXT PRIMARY KEY, post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, body TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS private_comments(id TEXT PRIMARY KEY, submission_id TEXT NOT NULL REFERENCES submissions(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, body TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS notifications(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, data TEXT NOT NULL, link TEXT, created_at TEXT NOT NULL, read INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS posts_class ON posts(class_id);
     CREATE INDEX IF NOT EXISTS subs_post ON submissions(post_id);
     CREATE INDEX IF NOT EXISTS notif_user ON notifications(user_id, created_at);
-    PRAGMA user_version=4;
+    PRAGMA user_version=5;
   `);
+  // columns added after 0.2; tables are created above, so this also upgrades older files in place
+  for (const [table, col, type] of [['classes', 'section', 'TEXT'], ['posts', 'audience', 'TEXT'], ['files', 'url', 'TEXT']])
+    if (!q(`PRAGMA table_info(${table})`).some(c => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
 
   // role of the user in the class; write=true also refuses archived classes
   function needRole(classId, uid, want, write = false) {
@@ -123,10 +125,20 @@ export function createServer({
     const p = one('SELECT * FROM posts WHERE id=?', pid);
     if (!p) bad('Not found', 404);
     const role = needRole(p.class_id, uid, undefined, write);
-    if (role === 'student' && p.publish_at && p.publish_at > now()) bad('Not found', 404); // still scheduled
+    if (role === 'student' && ((p.publish_at && p.publish_at > now()) || !inAudience(p, uid))) bad('Not found', 404); // scheduled, or not assigned to this student
     return [p, role];
   }
-  const filesOf = (col, v) => q(`SELECT id, name, size FROM files WHERE ${col}=?`, v);
+  // audience = JSON array of student ids, null = the whole class
+  const inAudience = (p, uid) => !p.audience || JSON.parse(p.audience).includes(uid);
+  function parseAudience(cid, v) {
+    if (v == null) return null;
+    const ids = Array.isArray(v) ? [...new Set(v)] : [];
+    const students = new Set(members(cid, 'student'));
+    if (!ids.length || ids.some(x => !students.has(x))) bad('Choose at least one student of this class');
+    return JSON.stringify(ids);
+  }
+  const recipients = (cid, audience) => audience ? JSON.parse(audience) : members(cid, 'student');
+  const filesOf = (col, v) => q(`SELECT id, name, size, url FROM files WHERE ${col}=?`, v);
   const mySubmission = (pid, uid) => one('SELECT * FROM submissions WHERE post_id=? AND user_id=?', pid, uid);
   const members = (cid, role) => q('SELECT user_id FROM members WHERE class_id=?' + (role ? ' AND role=?' : ''), ...(role ? [cid, role] : [cid])).map(r => r.user_id);
   // shortcut: notifications are created at post time; a scheduled post notifies nobody when it goes live
@@ -240,12 +252,14 @@ export function createServer({
     const role = needRole(cid, user.id), c = getClass(cid), teacher = role === 'teacher';
     const cls = { id: c.id, name: c.name, section: c.section, archived: c.archived, owner: c.owner_id === user.id, ...(teacher && { code: c.code, teacher_code: c.teacher_code }) };
     const people = q('SELECT u.id, u.name, m.role FROM members m JOIN users u ON u.id=m.user_id WHERE m.class_id=? ORDER BY m.role DESC, u.name', cid);
-    const posts = q(`SELECT p.id, p.kind, p.title, p.body, p.due, p.points, p.topic, p.publish_at, p.created_at, u.name author,
+    const posts = q(`SELECT p.id, p.kind, p.title, p.body, p.due, p.points, p.topic, p.publish_at, p.audience, p.created_at, u.name author,
         (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) comments
       FROM posts p JOIN users u ON u.id=p.user_id
-      WHERE p.class_id=? AND (? OR p.publish_at IS NULL OR p.publish_at<=?) ORDER BY COALESCE(p.publish_at, p.created_at) DESC`, cid, teacher ? 1 : 0, now())
+      WHERE p.class_id=? AND (? OR (p.publish_at IS NULL OR p.publish_at<=?) AND (p.audience IS NULL OR EXISTS (SELECT 1 FROM json_each(p.audience) WHERE value=?)))
+      ORDER BY COALESCE(p.publish_at, p.created_at) DESC`, cid, teacher ? 1 : 0, now(), user.id)
       .map(p => ({
         ...p,
+        audience: teacher && p.audience ? JSON.parse(p.audience) : undefined, // students never see who else is assigned
         files: filesOf('post_id', p.id),
         mine: !teacher && (p.kind === 'assignment' || p.kind === 'quiz')
           ? one('SELECT submitted_at, returned, CASE WHEN returned=1 THEN grade END grade FROM submissions WHERE post_id=? AND user_id=?', p.id, user.id) ?? null : undefined,
@@ -323,7 +337,7 @@ export function createServer({
     FROM posts p JOIN classes c ON c.id=p.class_id
       JOIN members m ON m.class_id=c.id AND m.user_id=?
       LEFT JOIN submissions s ON s.post_id=p.id AND s.user_id=m.user_id
-    WHERE c.archived=0 AND p.kind IN ('assignment','quiz') AND (m.role='teacher' OR p.publish_at IS NULL OR p.publish_at<=?)
+    WHERE c.archived=0 AND p.kind IN ('assignment','quiz') AND (m.role='teacher' OR (p.publish_at IS NULL OR p.publish_at<=?) AND (p.audience IS NULL OR EXISTS (SELECT 1 FROM json_each(p.audience) WHERE value=m.user_id)))
     ORDER BY p.due IS NULL, p.due`, user.id, now()));
 
   // ---------- posts ----------
@@ -333,19 +347,20 @@ export function createServer({
     if (!KINDS.includes(kind)) bad('Invalid post type');
     const f = postFields(kind, b), quiz = kind === 'quiz' ? parseQuiz(b.quiz) : null;
     if (quiz) f.points = quiz.length;
-    const pid = id();
-    run('INSERT INTO posts(id, class_id, user_id, kind, title, body, due, points, topic, publish_at, quiz, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-      pid, cid, user.id, kind, f.title, f.body, f.due, f.points, f.topic, f.publish_at, quiz && JSON.stringify(quiz), now());
-    if (!f.publish_at || f.publish_at <= now()) notify(members(cid, 'student'), 'post', { class: getClass(cid).name, title: postTitle(f) }, '#/p/' + pid);
+    const audience = parseAudience(cid, b.audience), pid = id();
+    run('INSERT INTO posts(id, class_id, user_id, kind, title, body, due, points, topic, publish_at, quiz, audience, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      pid, cid, user.id, kind, f.title, f.body, f.due, f.points, f.topic, f.publish_at, quiz && JSON.stringify(quiz), audience, now());
+    if (!f.publish_at || f.publish_at <= now()) notify(recipients(cid, audience), 'post', { class: getClass(cid).name, title: postTitle(f) }, '#/p/' + pid);
     return { id: pid };
   });
 
   route('PATCH', '/api/posts/:id', async ({ user, params: [pid], json }) => {
     const [p, role] = postOf(pid, user.id, true);
     if (role !== 'teacher') bad('Teachers only', 403);
-    const f = postFields(p.kind, { title: p.title, body: p.body, due: p.due, points: p.points, topic: p.topic, publish_at: p.publish_at, ...(await json()) });
+    const b = await json(), f = postFields(p.kind, { title: p.title, body: p.body, due: p.due, points: p.points, topic: p.topic, publish_at: p.publish_at, ...b });
     if (p.kind === 'quiz') f.points = p.points; // quiz points = question count, fixed
-    run('UPDATE posts SET title=?, body=?, due=?, points=?, topic=?, publish_at=? WHERE id=?', f.title, f.body, f.due, f.points, f.topic, f.publish_at, pid);
+    const audience = 'audience' in b ? parseAudience(p.class_id, b.audience) : p.audience;
+    run('UPDATE posts SET title=?, body=?, due=?, points=?, topic=?, publish_at=?, audience=? WHERE id=?', f.title, f.body, f.due, f.points, f.topic, f.publish_at, audience, pid);
   });
 
   route('DELETE', '/api/posts/:id', ({ user, params: [pid] }) => {
@@ -361,6 +376,7 @@ export function createServer({
     const quiz = quizRaw ? JSON.parse(quizRaw) : null;
     const comments = q('SELECT c.id, c.body, c.created_at, c.user_id, u.name author FROM comments c JOIN users u ON u.id=c.user_id WHERE c.post_id=? ORDER BY c.created_at', pid);
     post.author = one('SELECT name FROM users WHERE id=?', post.user_id)?.name;
+    post.audience = role === 'teacher' && post.audience ? JSON.parse(post.audience) : undefined;
     const out = { post, role, files: filesOf('post_id', pid), comments };
     const shape = s => ({
       ...s, files: filesOf('submission_id', s.id), answers: quiz && s.text ? JSON.parse(s.text) : undefined,
@@ -368,6 +384,7 @@ export function createServer({
     });
     if (role === 'teacher') {
       out.quiz = quiz;
+      out.students = q("SELECT u.id, u.name FROM members m JOIN users u ON u.id=m.user_id WHERE m.class_id=? AND m.role='student' ORDER BY u.name", post.class_id);
       // drafts stay private to the student until turned in, unless the student wrote to the teacher
       out.submissions = q(`SELECT s.*, u.name student FROM submissions s JOIN users u ON u.id=s.user_id WHERE s.post_id=?
         AND (s.submitted_at IS NOT NULL OR EXISTS(SELECT 1 FROM private_comments x WHERE x.submission_id=s.id)) ORDER BY u.name`, pid).map(shape);
@@ -459,18 +476,34 @@ export function createServer({
 
   // ---------- files ----------
   // Upload = raw request body. Teacher: attaches to the post. Student: attaches to their own submission.
-  route('POST', '/api/files', async ({ user, url, req }) => {
-    const name = str(url.searchParams.get('name')).slice(0, 200) || 'file';
-    const [p, role] = postOf(url.searchParams.get('post'), user.id, true);
-    if (Number(req.headers['content-length']) > maxUpload) bad('File too large', 413);
+  function attachTarget(pid, uid) {
+    const [p, role] = postOf(pid, uid, true);
     let sid = null;
     if (role === 'student') {
       if (p.kind !== 'assignment') bad('Not an assignment', 403);
-      const s = mySubmission(p.id, user.id);
+      const s = mySubmission(p.id, uid);
       if (s?.returned) bad('Already returned', 409);
       sid = s?.id ?? id();
-      if (!s) run('INSERT INTO submissions(id, post_id, user_id) VALUES(?,?,?)', sid, p.id, user.id);
+      if (!s) run('INSERT INTO submissions(id, post_id, user_id) VALUES(?,?,?)', sid, p.id, uid);
     }
+    return { pid: p.id, sid };
+  }
+
+  // a link is a files row with a url and no bytes on disk
+  route('POST', '/api/links', async ({ user, json }) => {
+    const b = await json(), { pid, sid } = attachTarget(b.post, user.id);
+    let link;
+    try { link = new URL(str(b.url)); } catch { bad('Enter a full link, like https://example.org'); }
+    if (!/^https?:$/.test(link.protocol) || link.href.length > 2000) bad('Enter a full link, like https://example.org');
+    const fid = id(), name = str(b.title).slice(0, 200) || link.hostname;
+    run('INSERT INTO files(id, name, size, user_id, post_id, submission_id, url) VALUES(?,?,?,?,?,?,?)', fid, name, 0, user.id, sid ? null : pid, sid, link.href);
+    return { id: fid, name, url: link.href };
+  });
+
+  route('POST', '/api/files', async ({ user, url, req }) => {
+    const name = str(url.searchParams.get('name')).slice(0, 200) || 'file';
+    if (Number(req.headers['content-length']) > maxUpload) bad('File too large', 413);
+    const { pid, sid } = attachTarget(url.searchParams.get('post'), user.id);
     const fid = id(), dest = path.join(filesDir, fid);
     let size = 0;
     try {
@@ -478,7 +511,7 @@ export function createServer({
         for await (const c of src) { if ((size += c.length) > maxUpload) bad('File too large', 413); yield c; }
       }, fs.createWriteStream(dest));
     } catch (e) { fs.rmSync(dest, { force: true }); throw e; }
-    run('INSERT INTO files(id, name, size, user_id, post_id, submission_id) VALUES(?,?,?,?,?,?)', fid, name, size, user.id, sid ? null : p.id, sid);
+    run('INSERT INTO files(id, name, size, user_id, post_id, submission_id) VALUES(?,?,?,?,?,?)', fid, name, size, user.id, sid ? null : pid, sid);
     return { id: fid, name, size };
   });
 
@@ -492,6 +525,7 @@ export function createServer({
 
   route('GET', '/api/files/:id', ({ user, params: [fid], res }) => {
     const f = fileAccess(fid, user.id);
+    if (f.url) bad('Not a file', 400);
     // octet-stream + attachment: an uploaded .html can never run in our origin
     res.writeHead(200, {
       'Content-Type': 'application/octet-stream',

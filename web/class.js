@@ -1,5 +1,5 @@
 // The class page: Stream, Classwork, People, Grades and Settings.
-import { state, h, icon, api, safe, iso, upload, save, rerender, avatar, colorOf, menu, attachment, field, dot, KIND_ICON } from './lib.js';
+import { state, h, icon, api, safe, iso, upload, save, rerender, avatar, colorOf, menu, attachment, field, dot, audiencePicker, linkAdder, KIND_ICON } from './lib.js';
 import { t, short, shortDay } from './i18n.js';
 
 const KIND = { announcement: 'Announcement', assignment: 'Assignment', quiz: 'Quiz', material: 'Material' };
@@ -35,10 +35,10 @@ function stream(c, cid, work) {
 
   const slot = h('div');
   const compose = teacher && !cls.archived ? h('div', { class: 'card pillbar' }, avatar(state.me.name),
-    h('button', { class: 'ghost-pill', onclick: () => slot.replaceChildren(announce(cid, () => slot.replaceChildren())) }, t('Announce something to your class'))) : null;
+    h('button', { class: 'ghost-pill', onclick: () => slot.replaceChildren(announce(cid, students(c), () => slot.replaceChildren())) }, t('Announce something to your class'))) : null;
 
   const feed = c.posts.map(p => h('article', { class: 'card post' },
-    h('div', { class: 'row' }, avatar(p.author), h('div', { class: 'grow' }, h('b', {}, p.author), h('br'), h('small', {}, dot([shortDay(p.created_at), teacher && p.publish_at > new Date().toISOString() && t('Scheduled for {d}', { d: short(p.publish_at) })])))),
+    h('div', { class: 'row' }, avatar(p.author), h('div', { class: 'grow' }, h('b', {}, p.author), h('br'), h('small', {}, dot([shortDay(p.created_at), teacher && p.publish_at > new Date().toISOString() && t('Scheduled for {d}', { d: short(p.publish_at) }), teacher && p.audience && forN(p.audience.length)])))),
     p.kind === 'announcement' ? h('p', { class: 'pre' }, p.body)
       : h('a', { class: 'postlink', href: '#/p/' + p.id }, h('span', { class: 'ico' }, icon(KIND_ICON[p.kind], 20)), t(POSTED[p.kind], { name: p.author, title: p.title })),
     p.files.map(f => attachment(f)),
@@ -47,14 +47,18 @@ function stream(c, cid, work) {
   return h('div', {}, banner, h('div', { class: 'cols' }, h('aside', {}, side), h('div', {}, compose, slot, feed.length ? feed : h('p', { class: 'muted' }, t('Nothing posted yet.')))));
 }
 
-function announce(cid, done) {
+const students = c => c.people.filter(p => p.role === 'student');
+const forN = n => t(n === 1 ? 'For {n} student' : 'For {n} students', { n });
+
+function announce(cid, studentList, done) {
   const text = h('textarea', { rows: 4, placeholder: t('Announce something to your class') });
   const topic = h('input', { placeholder: t('Topic (optional)') });
-  const files = h('input', { type: 'file', multiple: true });
-  return h('div', { class: 'card' }, text, topic, files, h('div', { class: 'actions' }, h('button', { class: 'text', onclick: done }, t('Cancel')),
+  const files = h('input', { type: 'file', multiple: true }), aud = audiencePicker(studentList), links = linkAdder();
+  return h('div', { class: 'card' }, text, topic, aud.el, files, links.el, h('div', { class: 'actions' }, h('button', { class: 'text', onclick: done }, t('Cancel')),
     h('button', { class: 'pill', onclick: safe(async () => {
-      const { id } = await api(`/classes/${cid}/posts`, 'POST', { kind: 'announcement', body: text.value, topic: topic.value });
+      const { id } = await api(`/classes/${cid}/posts`, 'POST', { kind: 'announcement', body: text.value, topic: topic.value, audience: aud.value() });
       for (const f of files.files) await upload(id, f);
+      await links.save(id);
       rerender();
     }) }, t('Post'))));
 }
@@ -76,23 +80,24 @@ function quizBuilder() {
   };
 }
 
-function composer(cid, kind, topics, done) {
+function composer(cid, kind, topics, studentList, done) {
   const title = h('input', { placeholder: t('Title') }), text = h('textarea', { rows: 3, placeholder: t('Instructions (optional)') });
   const topic = h('input', { placeholder: t('Topic (optional)') });
   topic.setAttribute('list', 'topics'); // `list` is read-only as a property
   const due = h('input', { type: 'datetime-local' }), pts = h('input', { type: 'number', min: 0 }), pub = h('input', { type: 'datetime-local' });
-  const files = h('input', { type: 'file', multiple: true }), qb = quizBuilder();
+  const files = h('input', { type: 'file', multiple: true }), qb = quizBuilder(), aud = audiencePicker(studentList), links = linkAdder();
   const send = safe(async () => {
     const { id } = await api(`/classes/${cid}/posts`, 'POST', {
       kind, title: title.value, body: text.value, topic: topic.value, due: iso(due), publish_at: iso(pub),
-      points: pts.value === '' ? null : +pts.value, quiz: kind === 'quiz' ? qb.value() : undefined,
+      points: pts.value === '' ? null : +pts.value, quiz: kind === 'quiz' ? qb.value() : undefined, audience: aud.value(),
     });
     for (const f of files.files) await upload(id, f);
+    await links.save(id);
     rerender();
   });
   return h('div', { class: 'card' }, h('h3', {}, t(KIND[kind])), title, text, h('datalist', { id: 'topics' }, topics.map(x => h('option', { value: x }))), topic,
     kind === 'assignment' || kind === 'quiz' ? field(t('Due'), due) : null, kind === 'assignment' ? field(t('Points'), pts) : null, field(t('Publish later'), pub),
-    kind === 'quiz' ? qb.el : null, files, h('div', { class: 'actions' }, h('button', { class: 'text', onclick: done }, t('Cancel')), h('button', { class: 'pill', onclick: send }, t('Post'))));
+    kind === 'quiz' ? qb.el : null, aud.el, files, links.el, h('div', { class: 'actions' }, h('button', { class: 'text', onclick: done }, t('Cancel')), h('button', { class: 'pill', onclick: send }, t('Post'))));
 }
 
 function classwork(c, cid) {
@@ -100,14 +105,14 @@ function classwork(c, cid) {
   const topics = [...new Set(c.posts.map(p => p.topic).filter(Boolean))];
   const slot = h('div'), list = h('div');
   const filter = h('select', { 'aria-label': t('Filter by topic') }, h('option', { value: '' }, t('All topics')), topics.map(x => h('option', { value: x }, x)));
-  const open = kind => slot.replaceChildren(composer(cid, kind, topics, () => slot.replaceChildren()));
+  const open = kind => slot.replaceChildren(composer(cid, kind, topics, students(c), () => slot.replaceChildren()));
   const create = teacher && !cls.archived ? menu([['assignment', 'Assignment'], ['quiz', 'Quiz'], ['material', 'Material']].map(([k, n]) => ({ label: t(n), onclick: () => open(k) })),
     h('span', { class: 'pill' }, icon('add', 20), t('Create'))) : null;
 
   const row = p => {
     const m = p.mine, state_ = m ? (m.returned && m.grade != null ? t('Grade: {g}', { g: m.grade }) : m.returned ? t('Returned') : m.submitted_at ? t('Turned in') : null) : null;
     return h('a', { class: 'cw-row', href: '#/p/' + p.id }, h('span', { class: 'ico' }, icon(KIND_ICON[p.kind], 20)), h('span', { class: 'grow' }, p.title),
-      h('small', {}, dot([state_, p.due ? t('Due: {d}', { d: short(p.due) }) : teacher && p.publish_at > new Date().toISOString() ? t('Scheduled: {d}', { d: short(p.publish_at) }) : t('Posted: {d}', { d: shortDay(p.created_at) })])));
+      h('small', {}, dot([teacher && p.audience && forN(p.audience.length), state_, p.due ? t('Due: {d}', { d: short(p.due) }) : teacher && p.publish_at > new Date().toISOString() ? t('Scheduled: {d}', { d: short(p.publish_at) }) : t('Posted: {d}', { d: shortDay(p.created_at) })])));
   };
   const draw = () => {
     const groups = new Map();
