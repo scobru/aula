@@ -92,11 +92,12 @@ export function createServer({
   const existing = one("SELECT 1 x FROM sqlite_master WHERE name='users'"), version = one('PRAGMA user_version').user_version;
   if (existing && version < 2) throw new Error(`${data}/aula.db is a 0.1 database; the schema changed, delete it (no migration, 0.1 was never released)`);
   if (existing && version === 2) db.exec('ALTER TABLE users RENAME COLUMN email TO username'); // 0.2 -> 0.3: old emails keep working as usernames at login
+  if (existing && version <= 3) db.exec('ALTER TABLE classes ADD COLUMN section TEXT'); // 0.3 -> 0.4
   db.exec(`
     PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
     CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL UNIQUE, salt TEXT NOT NULL, pw TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS classes(id TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT NOT NULL UNIQUE, teacher_code TEXT NOT NULL UNIQUE, owner_id TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS classes(id TEXT PRIMARY KEY, name TEXT NOT NULL, section TEXT, code TEXT NOT NULL UNIQUE, teacher_code TEXT NOT NULL UNIQUE, owner_id TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS members(class_id TEXT NOT NULL REFERENCES classes(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('teacher','student')), PRIMARY KEY(class_id, user_id));
     CREATE TABLE IF NOT EXISTS posts(id TEXT PRIMARY KEY, class_id TEXT NOT NULL REFERENCES classes(id) ON DELETE CASCADE, user_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT, body TEXT NOT NULL DEFAULT '', due TEXT, points REAL, topic TEXT, publish_at TEXT, quiz TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS submissions(id TEXT PRIMARY KEY, post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', submitted_at TEXT, grade REAL, feedback TEXT, returned INTEGER NOT NULL DEFAULT 0, UNIQUE(post_id, user_id));
@@ -107,7 +108,7 @@ export function createServer({
     CREATE INDEX IF NOT EXISTS posts_class ON posts(class_id);
     CREATE INDEX IF NOT EXISTS subs_post ON submissions(post_id);
     CREATE INDEX IF NOT EXISTS notif_user ON notifications(user_id, created_at);
-    PRAGMA user_version=3;
+    PRAGMA user_version=4;
   `);
 
   // role of the user in the class; write=true also refuses archived classes
@@ -207,16 +208,16 @@ export function createServer({
 
   // ---------- classes ----------
   route('GET', '/api/classes', ({ user }) => q(
-    'SELECT c.id, c.name, c.archived, m.role FROM classes c JOIN members m ON m.class_id=c.id WHERE m.user_id=? ORDER BY c.archived, c.name', user.id));
+    'SELECT c.id, c.name, c.section, c.archived, m.role FROM classes c JOIN members m ON m.class_id=c.id WHERE m.user_id=? ORDER BY c.archived, c.name', user.id));
 
   route('POST', '/api/classes', async ({ user, json }) => {
-    const name = str((await json()).name);
+    const b = await json(), name = str(b.name), section = str(b.section).slice(0, 100) || null;
     if (!name) bad('Class name required');
     for (let i = 0; i < 5; i++) {
       const cid = id(), c = code(6), tc = code(8); // different lengths: a join code can never match both columns
       try {
         tx(() => {
-          run('INSERT INTO classes(id, name, code, teacher_code, owner_id) VALUES(?,?,?,?,?)', cid, name, c, tc, user.id);
+          run('INSERT INTO classes(id, name, section, code, teacher_code, owner_id) VALUES(?,?,?,?,?,?)', cid, name, section, c, tc, user.id);
           run("INSERT INTO members(class_id, user_id, role) VALUES(?,?,'teacher')", cid, user.id);
         });
         return { id: cid, code: c };
@@ -237,7 +238,7 @@ export function createServer({
 
   route('GET', '/api/classes/:id', ({ user, params: [cid] }) => {
     const role = needRole(cid, user.id), c = getClass(cid), teacher = role === 'teacher';
-    const cls = { id: c.id, name: c.name, archived: c.archived, owner: c.owner_id === user.id, ...(teacher && { code: c.code, teacher_code: c.teacher_code }) };
+    const cls = { id: c.id, name: c.name, section: c.section, archived: c.archived, owner: c.owner_id === user.id, ...(teacher && { code: c.code, teacher_code: c.teacher_code }) };
     const people = q('SELECT u.id, u.name, m.role FROM members m JOIN users u ON u.id=m.user_id WHERE m.class_id=? ORDER BY m.role DESC, u.name', cid);
     const posts = q(`SELECT p.id, p.kind, p.title, p.body, p.due, p.points, p.topic, p.publish_at, p.created_at, u.name author,
         (SELECT COUNT(*) FROM comments x WHERE x.post_id=p.id) comments
@@ -257,7 +258,7 @@ export function createServer({
     const b = await json(), c = getClass(cid);
     const name = 'name' in b ? str(b.name) : c.name;
     if (!name) bad('Class name required');
-    run('UPDATE classes SET name=?, archived=? WHERE id=?', name, 'archived' in b ? (b.archived ? 1 : 0) : c.archived, cid);
+    run('UPDATE classes SET name=?, section=?, archived=? WHERE id=?', name, 'section' in b ? str(b.section).slice(0, 100) || null : c.section, 'archived' in b ? (b.archived ? 1 : 0) : c.archived, cid);
   });
 
   route('DELETE', '/api/classes/:id', ({ user, params: [cid] }) => {
@@ -359,6 +360,7 @@ export function createServer({
     const [{ quiz: quizRaw, ...post }, role] = postOf(pid, user.id);
     const quiz = quizRaw ? JSON.parse(quizRaw) : null;
     const comments = q('SELECT c.id, c.body, c.created_at, c.user_id, u.name author FROM comments c JOIN users u ON u.id=c.user_id WHERE c.post_id=? ORDER BY c.created_at', pid);
+    post.author = one('SELECT name FROM users WHERE id=?', post.user_id)?.name;
     const out = { post, role, files: filesOf('post_id', pid), comments };
     const shape = s => ({
       ...s, files: filesOf('submission_id', s.id), answers: quiz && s.text ? JSON.parse(s.text) : undefined,
