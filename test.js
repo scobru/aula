@@ -173,6 +173,11 @@ test('grades csv neutralizes formulas', async () => {
 test('static files and path traversal', async () => {
   assert.equal((await call(null, 'GET', '/')).status, 200);
   assert.equal((await call(null, 'GET', '/../server.js')).status, 404);
+  const font = await fetch(base + '/fonts/roboto-latin-400-normal.woff2');
+  assert.equal(font.status, 200);
+  assert.equal(font.headers.get('content-type'), 'font/woff2');
+  assert.match(font.headers.get('cache-control'), /immutable/);
+  assert.equal((await fetch(base + '/fonts/LICENSE.txt')).status, 404, 'only known types are served');
 });
 
 test('0.2 database (email column) migrates; old email still logs in as username', async () => {

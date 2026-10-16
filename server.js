@@ -10,7 +10,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.join(HERE, 'web');
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2' };
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const KINDS = ['announcement', 'assignment', 'quiz', 'material'];
 const SESSION_DAYS = 30;
@@ -518,6 +518,7 @@ export function createServer({
       'Content-Type': MIME[path.extname(f)],
       'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
       'X-Content-Type-Options': 'nosniff',
+      ...(f.endsWith('.woff2') && { 'Cache-Control': 'public, max-age=31536000, immutable' }), // file names carry the version
     });
     res.end(fs.readFileSync(f));
   }
