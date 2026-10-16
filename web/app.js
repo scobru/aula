@@ -128,6 +128,13 @@ function profilePage() {
     form([old, next], t('Change password'), async () => { await api('/password', 'POST', { old: old.value, new: next.value }); alert(t('Password changed')); old.value = next.value = ''; })) };
 }
 
+// an invite link: join with the code in the URL, then open the class
+async function joinPage(code) {
+  const r = await api('/join', 'POST', { code });
+  location.replace('#/c/' + r.id);
+  return { el: h('main', { class: 'page' }, h('p', { class: 'muted' }, t('Joining…'))) };
+}
+
 // ---------- router ----------
 async function render() {
   if (!state.token) return authView();
@@ -136,6 +143,7 @@ async function render() {
     const [me, classes, notes] = await Promise.all([api('/me'), api('/classes'), api('/notifications')]);
     state.me = me;
     const pages = {
+      join: () => joinPage(id),
       c: () => classPage(id, sub, classes), p: () => postPage(id, sub, classes), work: workPage, cal: calendarPage, n: notificationsPage, me: profilePage, archived: () => archivedPage(classes),
     };
     const page = await (pages[kind] || (() => homePage(classes)))();

@@ -231,6 +231,67 @@ test('0.4 database (no audience/url columns) upgrades in place', async () => {
   check.close(); s.close(); fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('topics: create, rename, reorder, delete', async () => {
+  const { id: c2 } = await ok(call(teacher, 'POST', '/api/classes', { name: 'Topics' }));
+  const code2 = (await ok(call(teacher, 'GET', `/api/classes/${c2}`))).class.code;
+  await ok(call(ann, 'POST', '/api/join', { code: code2 }));
+  const list = async tok => (await ok(call(tok, 'GET', `/api/classes/${c2}`))).topics;
+  const post = (topic, extra = {}) => ok(call(teacher, 'POST', `/api/classes/${c2}/posts`, { kind: 'material', title: topic + ' post', topic, ...extra }));
+
+  await ok(call(ann, 'POST', `/api/classes/${c2}/topics`, { name: 'Nope' }), 403);
+  await ok(call(teacher, 'POST', `/api/classes/${c2}/topics`, { name: '  ' }), 400);
+  await ok(call(teacher, 'POST', `/api/classes/${c2}/topics`, { name: 'Algebra' }));
+  assert.equal((await ok(call(teacher, 'POST', `/api/classes/${c2}/topics`, { name: 'algebra' }))).name, 'Algebra', 'case-insensitive, keeps the first spelling');
+  const p1 = (await post('ALGEBRA')).id; // a post typed in another case joins the existing topic
+  const p2 = (await post('Geometry')).id;
+  await post('Music');
+  assert.deepEqual(await list(teacher), ['Algebra', 'Geometry', 'Music']);
+  assert.equal((await ok(call(teacher, 'GET', `/api/posts/${p1}`))).post.topic, 'Algebra');
+
+  // students only see topic names that hold something visible to them; empty topics stay teacher-only
+  await ok(call(teacher, 'POST', `/api/classes/${c2}/topics`, { name: 'Empty' }));
+  assert.deepEqual(await list(ann), ['Algebra', 'Geometry', 'Music']);
+  await post('Secret', { audience: [(await ok(call(teacher, 'GET', `/api/classes/${c2}`))).people.find(p => p.name === 'teacher').id] }).catch(() => {});
+  assert.equal((await list(ann)).includes('Empty'), false);
+
+  await ok(call(teacher, 'PUT', `/api/classes/${c2}/topics/order`, { names: ['Music', 'algebra'] })); // unlisted keep their order after
+  assert.deepEqual((await list(teacher)).slice(0, 3), ['Music', 'Algebra', 'Geometry']);
+  await ok(call(teacher, 'PUT', `/api/classes/${c2}/topics/order`, { names: 'x' }), 400);
+  await ok(call(ann, 'PUT', `/api/classes/${c2}/topics/order`, { names: [] }), 403);
+
+  await ok(call(teacher, 'PATCH', `/api/classes/${c2}/topics`, { from: 'Geometry', to: 'Algebra' }), 409);
+  await ok(call(teacher, 'PATCH', `/api/classes/${c2}/topics`, { from: 'nothing', to: 'X' }), 404);
+  await ok(call(teacher, 'PATCH', `/api/classes/${c2}/topics`, { from: 'Geometry', to: 'Shapes' }));
+  assert.equal((await ok(call(ann, 'GET', `/api/posts/${p2}`))).post.topic, 'Shapes', 'posts follow the rename');
+  await ok(call(teacher, 'PATCH', `/api/classes/${c2}/topics`, { from: 'Shapes', to: 'shapes' })); // case-only change is allowed
+  assert.ok((await list(teacher)).includes('shapes'));
+
+  await ok(call(teacher, 'DELETE', `/api/classes/${c2}/topics?name=SHAPES`));
+  assert.equal((await ok(call(ann, 'GET', `/api/posts/${p2}`))).post.topic, null, 'its posts stay, without a topic');
+  assert.equal((await list(teacher)).includes('shapes'), false);
+  await ok(call(teacher, 'DELETE', `/api/classes/${c2}/topics?name=shapes`), 404);
+  await ok(call(ann, 'DELETE', `/api/classes/${c2}/topics?name=Music`), 403);
+});
+
+test('existing post topics become topics on upgrade, with one spelling per class', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aula-tp-'));
+  const old = new DatabaseSync(path.join(dir, 'aula.db'));
+  old.exec(`CREATE TABLE users(id TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL UNIQUE, salt TEXT NOT NULL, pw TEXT NOT NULL);
+    CREATE TABLE classes(id TEXT PRIMARY KEY, name TEXT NOT NULL, section TEXT, code TEXT NOT NULL UNIQUE, teacher_code TEXT NOT NULL UNIQUE, owner_id TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE posts(id TEXT PRIMARY KEY, class_id TEXT NOT NULL, user_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT, body TEXT NOT NULL DEFAULT '', due TEXT, points REAL, topic TEXT, publish_at TEXT, quiz TEXT, audience TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE files(id TEXT PRIMARY KEY, name TEXT NOT NULL, size INTEGER NOT NULL, user_id TEXT NOT NULL, post_id TEXT, submission_id TEXT, url TEXT);
+    PRAGMA user_version=5;`);
+  old.prepare("INSERT INTO classes(id, name, code, teacher_code, owner_id) VALUES('c', 'C', 'ABCDEF', 'ABCDEFGH', 'u')").run();
+  const ins = old.prepare("INSERT INTO posts(id, class_id, user_id, kind, title, topic, created_at) VALUES(?,?,?,'material','t',?,?)");
+  ins.run('p1', 'c', 'u', 'Verifiche', '2026-01-01'); ins.run('p2', 'c', 'u', 'Teoria', '2026-01-02'); ins.run('p3', 'c', 'u', 'verifiche', '2026-01-03'); ins.run('p4', 'c', 'u', null, '2026-01-04');
+  old.close();
+  const s = createServer({ data: dir });
+  const check = new DatabaseSync(path.join(dir, 'aula.db'));
+  assert.deepEqual(check.prepare('SELECT name FROM topics WHERE class_id=? ORDER BY position').all('c').map(r => r.name), ['Verifiche', 'Teoria']);
+  assert.deepEqual(check.prepare('SELECT id, topic FROM posts ORDER BY id').all().map(r => r.topic), ['Verifiche', 'Teoria', 'Verifiche', null], 'one spelling per class');
+  check.close(); s.close(); fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('static files and path traversal', async () => {
   assert.equal((await call(null, 'GET', '/')).status, 200);
   assert.equal((await call(null, 'GET', '/../server.js')).status, 404);
