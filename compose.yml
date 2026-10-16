@@ -1,0 +1,10 @@
+services:
+  aula:
+    build: .
+    ports: ["127.0.0.1:8788:8788"]   # put Caddy/nginx with HTTPS in front
+    volumes: ["aula-data:/data"]
+    environment:
+      AULA_REGISTRATION: open        # set to "closed" once your users exist
+    restart: unless-stopped
+volumes:
+  aula-data:

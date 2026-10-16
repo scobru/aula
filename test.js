@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { createServer } from './server.js';
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), 'aula-'));
@@ -19,7 +21,7 @@ const call = async (token, method, url, body, raw) => {
   const type = r.headers.get('content-type') || '';
   return { status: r.status, body: type.includes('json') ? await r.json() : Buffer.from(await r.arrayBuffer()), type };
 };
-const signup = async name => (await call(null, 'POST', '/api/register', { name, email: `${name}@x.org`, password: 'password1' })).body.token;
+const signup = async name => (await call(null, 'POST', '/api/register', { name, username: name.replace(/\W/g, ''), password: 'password1' })).body.token;
 const ok = async (p, status = 200) => { const r = await p; assert.equal(r.status, status, JSON.stringify(r.body)); return r.body; };
 
 let teacher, ann, bob, cid, codes;
@@ -35,17 +37,24 @@ before(async () => {
 
 test('auth: unauthenticated, wrong password, logout, password change', async () => {
   await ok(call(null, 'GET', '/api/classes'), 401);
-  await ok(call(null, 'POST', '/api/login', { email: 'ann@x.org', password: 'nope' }), 401);
-  const t = (await ok(call(null, 'POST', '/api/login', { email: 'bob@x.org', password: 'password1' }))).token;
+  await ok(call(null, 'POST', '/api/login', { username: 'ann', password: 'nope' }), 401);
+  const t = (await ok(call(null, 'POST', '/api/login', { username: 'bob', password: 'password1' }))).token;
   await ok(call(t, 'POST', '/api/logout'));
   await ok(call(t, 'GET', '/api/me'), 401);
-  const c = await signup('carl'), c2 = (await ok(call(null, 'POST', '/api/login', { email: 'carl@x.org', password: 'password1' }))).token;
+  const c = await signup('carl'), c2 = (await ok(call(null, 'POST', '/api/login', { username: 'carl', password: 'password1' }))).token;
   await ok(call(c, 'POST', '/api/password', { old: 'wrongwrong', new: 'password2' }), 403);
   await ok(call(c, 'POST', '/api/password', { old: 'password1', new: 'password2' }));
   await ok(call(c2, 'GET', '/api/me'), 401); // other sessions die
   await ok(call(c, 'GET', '/api/me'));
   await ok(call(c, 'PUT', '/api/me', { name: 'Carlo' }));
   assert.equal((await call(c, 'GET', '/api/me')).body.name, 'Carlo');
+});
+
+test('usernames: validated, unique, case-insensitive', async () => {
+  const reg = username => call(null, 'POST', '/api/register', { name: 'X', username, password: 'password1' });
+  await ok(reg('no'), 400); await ok(reg('has space'), 400); await ok(reg('bad@mail.com'), 400);
+  await ok(reg('Zed_1')); await ok(reg('zed_1'), 409);
+  await ok(call(null, 'POST', '/api/login', { username: 'ZED_1', password: 'password1' }));
 });
 
 test('membership: codes, roles, co-teacher, leave/remove, owner rules', async () => {
@@ -159,4 +168,18 @@ test('grades csv neutralizes formulas', async () => {
 test('static files and path traversal', async () => {
   assert.equal((await call(null, 'GET', '/')).status, 200);
   assert.equal((await call(null, 'GET', '/../server.js')).status, 404);
+});
+
+test('0.2 database (email column) migrates; old email still logs in as username', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aula-mig-'));
+  const old = new DatabaseSync(path.join(dir, 'aula.db'));
+  const salt = 'ab'.repeat(16);
+  old.exec(`CREATE TABLE users(id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, salt TEXT NOT NULL, pw TEXT NOT NULL); PRAGMA user_version=2;`);
+  old.prepare('INSERT INTO users VALUES(?,?,?,?,?)').run('u1', 'Old', 'old@x.org', salt, crypto.scryptSync('password1', salt, 64).toString('hex'));
+  old.close();
+  const s = createServer({ data: dir });
+  await new Promise(r => s.listen(0, '127.0.0.1', r));
+  const r = await fetch(`http://127.0.0.1:${s.address().port}/api/login`, { method: 'POST', body: JSON.stringify({ username: 'old@x.org', password: 'password1' }) });
+  assert.equal(r.status, 200);
+  s.close(); fs.rmSync(dir, { recursive: true, force: true });
 });

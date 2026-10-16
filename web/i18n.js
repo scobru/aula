@@ -2,7 +2,7 @@
 const IT = {
   // shell
   'Classes': 'Classi', 'Work': 'Compiti', 'Calendar': 'Calendario', 'Notifications': 'Notifiche', 'Log out': 'Esci', 'Home': 'Home',
-  'Name': 'Nome', 'Email': 'Email', 'Password (min 8 characters)': 'Password (min 8 caratteri)', 'Create account': 'Crea account', 'Log in': 'Accedi',
+  'Name': 'Nome', 'Username': 'Nome utente', 'Password (min 8 characters)': 'Password (min 8 caratteri)', 'Create account': 'Crea account', 'Log in': 'Accedi',
   'Have an account? Log in': 'Hai un account? Accedi', 'New here? Register': 'Nuovo? Registrati',
   // home
   'Your classes': 'Le tue classi', 'No classes yet.': 'Ancora nessuna classe.', 'Archived ({n})': 'Archiviate ({n})', 'Create a class': 'Crea una classe',
@@ -32,9 +32,9 @@ const IT = {
   'Unsubmit': 'Ritira consegna', 'Save draft': 'Salva bozza', 'Grade': 'Voto', 'Feedback': 'Feedback', 'Returned': 'Restituito', '(late)': '(in ritardo)',
   'Submissions ({n})': 'Consegne ({n})', 'Return all graded': 'Restituisci tutti i valutati', '{n} returned': '{n} restituiti', 'Nothing turned in yet.': 'Nessuna consegna.', 'Download failed': 'Download non riuscito',
   // server messages
-  'Not found': 'Non trovato', 'Teachers only': 'Solo per i docenti', 'Login required': 'Accesso richiesto', 'Invalid email or password': 'Email o password errate',
-  'Too many attempts, try again later': 'Troppi tentativi, riprova più tardi', 'Registration is closed': 'Le registrazioni sono chiuse', 'Email already registered': 'Email già registrata',
-  'Name, valid email and password (min 8 chars) required': 'Servono nome, email valida e password (min 8 caratteri)', 'Name required': 'Nome obbligatorio', 'Wrong current password': 'Password attuale errata',
+  'Not found': 'Non trovato', 'Teachers only': 'Solo per i docenti', 'Login required': 'Accesso richiesto', 'Invalid username or password': 'Nome utente o password errati',
+  'Too many attempts, try again later': 'Troppi tentativi, riprova più tardi', 'Registration is closed': 'Le registrazioni sono chiuse', 'Username already taken': 'Nome utente già in uso',
+  'Name, username (3-32 letters, digits, . _ -) and password (min 8 chars) required': 'Servono nome, nome utente (3-32 tra lettere, cifre, . _ -) e password (min 8 caratteri)', 'Name required': 'Nome obbligatorio', 'Wrong current password': 'Password attuale errata',
   'Password must be at least 8 characters': 'La password deve avere almeno 8 caratteri', 'Class name required': 'Nome della classe obbligatorio', 'No class with that code': 'Nessuna classe con quel codice',
   'Class is archived': 'La classe è archiviata', 'Only the class owner can delete it': 'Solo il proprietario può eliminare la classe', 'The owner cannot leave; delete the class instead': 'Il proprietario non può uscire: elimina la classe',
   'Not allowed': 'Non consentito', 'Invalid post type': 'Tipo di post non valido', 'Text required': 'Testo obbligatorio', 'Title required': 'Titolo obbligatorio', 'Invalid due date': 'Scadenza non valida',

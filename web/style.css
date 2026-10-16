@@ -36,4 +36,4 @@ div.err { font-weight: 600; }
 table { border-collapse: collapse; width: 100%; }
 th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; white-space: nowrap; }
 a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-@media (max-width: 520px) { input:not([type=checkbox]):not([type=radio]), select { flex: 1 1 100%; } header nav { order: 3; width: 100%; } }
+@media (max-width: 520px) { main input:not([type=checkbox]):not([type=radio]), main select { flex: 1 1 100%; } header { gap: 4px 12px; } header nav { order: 3; width: 100%; } }
