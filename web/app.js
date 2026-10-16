@@ -9,7 +9,7 @@ const h = (tag, p = {}, ...kids) => {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(p)) k.startsWith('on') ? e.addEventListener(k.slice(2), v) : k === 'class' ? (e.className = v) : k.includes('-') ? e.setAttribute(k, v) : (e[k] = v);
   if (e.placeholder && !e.getAttribute('aria-label')) e.setAttribute('aria-label', e.placeholder);
-  e.append(...kids.flat().filter(x => x != null && x !== false));
+  e.append(...kids.flat(Infinity).filter(x => x != null && x !== false));
   return e;
 };
 const safe = fn => async (...a) => { try { await fn(...a); } catch (e) { alert(t(e.message)); } };
@@ -63,17 +63,17 @@ const meta = (...parts) => h('small', {}, parts.filter(Boolean).join(' · '));
 function authView() {
   let register = false;
   const draw = () => {
-    const name = h('input', { placeholder: t('Name'), hidden: !register });
-    const email = h('input', { type: 'email', placeholder: t('Email'), required: true });
+    const name = h('input', { placeholder: t('Name'), hidden: !register, autocomplete: 'name' });
+    const username = h('input', { placeholder: t('Username'), required: true, autocomplete: 'username', autocapitalize: 'none' });
     const pw = h('input', { type: 'password', placeholder: t('Password (min 8 characters)'), required: true });
     app.replaceChildren(h('form', {
       class: 'auth',
       onsubmit: safe(async e => {
         e.preventDefault();
-        setToken((await api(register ? '/register' : '/login', 'POST', { name: name.value, email: email.value, password: pw.value })).token);
+        setToken((await api(register ? '/register' : '/login', 'POST', { name: name.value, username: username.value, password: pw.value })).token);
         render();
       }),
-    }, h('h1', {}, 'Aula'), name, email, pw,
+    }, h('h1', {}, 'Aula'), name, username, pw,
     h('button', {}, register ? t('Create account') : t('Log in')),
     h('a', { href: '#', onclick: e => { e.preventDefault(); register = !register; draw(); } }, register ? t('Have an account? Log in') : t('New here? Register')),
     langSelect()));
@@ -139,7 +139,7 @@ async function profileView() {
   const name = h('input', { value: me.name, required: true });
   const old = h('input', { type: 'password', placeholder: t('Current password'), required: true });
   const next = h('input', { type: 'password', placeholder: t('New password (min 8 characters)'), required: true });
-  return h('main', {}, h('h2', {}, t('Profile')), h('p', { class: 'muted' }, me.email),
+  return h('main', {}, h('h2', {}, t('Profile')), h('p', { class: 'muted' }, me.username),
     form(name, t('Save'), async () => { await api('/me', 'PUT', { name: name.value }); render(); }),
     h('h3', {}, t('Change password')),
     form([old, next], t('Change password'), async () => { await api('/password', 'POST', { old: old.value, new: next.value }); alert(t('Password changed')); old.value = next.value = ''; }));

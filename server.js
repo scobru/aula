@@ -89,11 +89,12 @@ export function createServer({
   const tx = fn => { db.exec('BEGIN'); try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; } };
   const rmFiles = ids => ids.forEach(f => fs.rmSync(path.join(filesDir, f), { force: true }));
 
-  if (one("SELECT 1 x FROM sqlite_master WHERE name='users'") && one('PRAGMA user_version').user_version < 2)
-    throw new Error(`${data}/aula.db is a 0.1 database; the schema changed, delete it (no migration, 0.1 was never released)`);
+  const existing = one("SELECT 1 x FROM sqlite_master WHERE name='users'"), version = one('PRAGMA user_version').user_version;
+  if (existing && version < 2) throw new Error(`${data}/aula.db is a 0.1 database; the schema changed, delete it (no migration, 0.1 was never released)`);
+  if (existing && version === 2) db.exec('ALTER TABLE users RENAME COLUMN email TO username'); // 0.2 -> 0.3: old emails keep working as usernames at login
   db.exec(`
     PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
-    CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, salt TEXT NOT NULL, pw TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL UNIQUE, salt TEXT NOT NULL, pw TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS classes(id TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT NOT NULL UNIQUE, teacher_code TEXT NOT NULL UNIQUE, owner_id TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS members(class_id TEXT NOT NULL REFERENCES classes(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('teacher','student')), PRIMARY KEY(class_id, user_id));
@@ -106,7 +107,7 @@ export function createServer({
     CREATE INDEX IF NOT EXISTS posts_class ON posts(class_id);
     CREATE INDEX IF NOT EXISTS subs_post ON submissions(post_id);
     CREATE INDEX IF NOT EXISTS notif_user ON notifications(user_id, created_at);
-    PRAGMA user_version=2;
+    PRAGMA user_version=3;
   `);
 
   // role of the user in the class; write=true also refuses archived classes
@@ -149,30 +150,30 @@ export function createServer({
   // ---------- account ----------
   route('POST', '/api/register', async ({ json }) => {
     if (registration === 'closed') bad('Registration is closed', 403);
-    const b = await json(), name = str(b.name), email = str(b.email).toLowerCase();
-    if (!name || !/^\S+@\S+$/.test(email) || typeof b.password !== 'string' || b.password.length < 8) bad('Name, valid email and password (min 8 chars) required');
+    const b = await json(), name = str(b.name), username = str(b.username).toLowerCase();
+    if (!name || !/^[a-z0-9._-]{3,32}$/.test(username) || typeof b.password !== 'string' || b.password.length < 8) bad('Name, username (3-32 letters, digits, . _ -) and password (min 8 chars) required');
     const salt = crypto.randomBytes(16).toString('hex'), uid = id();
-    try { run('INSERT INTO users(id, name, email, salt, pw) VALUES(?,?,?,?,?)', uid, name, email, salt, hashPw(b.password, salt)); }
-    catch { bad('Email already registered', 409); }
+    try { run('INSERT INTO users(id, name, username, salt, pw) VALUES(?,?,?,?,?)', uid, name, username, salt, hashPw(b.password, salt)); }
+    catch { bad('Username already taken', 409); }
     return newSession(uid);
   }, true);
 
   route('POST', '/api/login', async ({ json }) => {
-    const b = await json(), email = str(b.email).toLowerCase();
-    const f = fails.get(email);
+    const b = await json(), username = str(b.username).toLowerCase();
+    const f = fails.get(username);
     if (f && f.n >= 10 && Date.now() - f.t < 9e5) bad('Too many attempts, try again later', 429);
-    const u = one('SELECT * FROM users WHERE email=?', email);
+    const u = one('SELECT * FROM users WHERE username=?', username);
     if (!u || typeof b.password !== 'string' || !same(hashPw(b.password, u.salt), u.pw)) {
       const cur = f && Date.now() - f.t < 9e5 ? f : { n: 0, t: Date.now() };
-      fails.set(email, { n: cur.n + 1, t: cur.t });
-      bad('Invalid email or password', 401);
+      fails.set(username, { n: cur.n + 1, t: cur.t });
+      bad('Invalid username or password', 401);
     }
-    fails.delete(email);
+    fails.delete(username);
     return newSession(u.id);
   }, true);
 
   route('POST', '/api/logout', ({ tok }) => { run('DELETE FROM sessions WHERE token=?', sha(tok)); });
-  route('GET', '/api/me', ({ user }) => ({ id: user.id, name: user.name, email: user.email }));
+  route('GET', '/api/me', ({ user }) => ({ id: user.id, name: user.name, username: user.username }));
 
   route('PUT', '/api/me', async ({ user, json }) => {
     const name = str((await json()).name);
