@@ -218,7 +218,13 @@ function streamTab(c, cid) {
 
 function peopleTab(c, cid) {
   const del = (p, label, confirmMsg) => h('button', { class: 'ghost', onclick: safe(async () => { if (confirm(confirmMsg)) { await api(`/classes/${cid}/members/${p.id}`, 'DELETE'); location.hash = p.id === me.id ? '#/' : '#/c/' + cid + '/people'; render(); } }) }, label);
+  const reset = p => h('button', { class: 'ghost', onclick: safe(async () => {
+    if (!confirm(t('Reset the password of {name}? They will be signed out everywhere.', { name: p.name }))) return;
+    const r = await api(`/classes/${cid}/members/${p.id}/reset`, 'POST');
+    alert(t('Username: {u}\nTemporary password: {p}\nTell them to change it in Profile. It is shown only once.', { u: r.username, p: r.password }));
+  }) }, t('Reset password'));
   return h('div', {}, c.people.map(p => h('div', { class: 'card row' }, `${p.name} `, h('small', {}, t(p.role)), h('span', { class: 'grow' }),
+    c.role === 'teacher' && p.role === 'student' ? reset(p) : null,
     p.id === me.id ? (c.class.owner ? null : del(p, t('Leave class'), t('Leave this class?')))
       : c.role === 'teacher' && (p.role === 'student' || c.class.owner) ? del(p, t('Remove'), t('Remove {name} from the class?', { name: p.name })) : null)));
 }

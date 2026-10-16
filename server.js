@@ -190,6 +190,14 @@ export function createServer({
     run('DELETE FROM sessions WHERE user_id=? AND token<>?', user.id, sha(tok)); // other devices must log in again
   });
 
+  // sets a random password and signs the user out everywhere; returns it so a human can pass it on
+  function tempPassword(uid) {
+    const pw = code(10), salt = crypto.randomBytes(16).toString('hex');
+    run('UPDATE users SET salt=?, pw=? WHERE id=?', salt, hashPw(pw, salt), uid);
+    run('DELETE FROM sessions WHERE user_id=?', uid);
+    return pw;
+  }
+
   // ---------- notifications ----------
   route('GET', '/api/notifications', ({ user }) => ({
     unread: one('SELECT COUNT(*) n FROM notifications WHERE user_id=? AND read=0', user.id).n,
@@ -268,6 +276,18 @@ export function createServer({
     if (uid === c.owner_id) bad('The owner cannot leave; delete the class instead', 403);
     if (uid !== user.id && (role !== 'teacher' || (target.role === 'teacher' && c.owner_id !== user.id))) bad('Not allowed', 403);
     run('DELETE FROM members WHERE class_id=? AND user_id=?', cid, uid);
+  });
+
+  // A teacher can reset a student's password only if the student belongs to no class that teacher
+  // does not teach: otherwise one teacher could take over an account that other teachers' classes rely on.
+  route('POST', '/api/classes/:id/members/:uid/reset', ({ user, params: [cid, uid] }) => {
+    needRole(cid, user.id, 'teacher');
+    const target = one('SELECT u.username, m.role FROM members m JOIN users u ON u.id=m.user_id WHERE m.class_id=? AND m.user_id=?', cid, uid);
+    if (!target) bad('Not found', 404);
+    if (target.role !== 'student' || uid === user.id) bad('Only students can be reset', 403);
+    if (one("SELECT 1 x FROM members m WHERE m.user_id=? AND NOT EXISTS (SELECT 1 FROM members t WHERE t.class_id=m.class_id AND t.user_id=? AND t.role='teacher')", uid, user.id))
+      bad('This student is also in classes you do not teach', 403);
+    return { username: target.username, password: tempPassword(uid) };
   });
 
   route('GET', '/api/classes/:id/grades', ({ user, params: [cid] }) => {
@@ -500,7 +520,7 @@ export function createServer({
     res.end(fs.readFileSync(f));
   }
 
-  return http.createServer(async (req, res) => {
+  const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://x');
       if (!url.pathname.startsWith('/api/')) return serveStatic(url.pathname, res);
@@ -520,9 +540,20 @@ export function createServer({
       else res.destroy();
     }
   });
+  // for the operator: `node server.js reset-password <username>` (also the only way to recover a teacher)
+  server.resetPassword = username => {
+    const u = one('SELECT id FROM users WHERE username=?', str(username).toLowerCase());
+    return u ? tempPassword(u.id) : null;
+  };
+  return server;
 }
 
 if (fs.realpathSync(process.argv[1] || '') === fileURLToPath(import.meta.url)) {
-  const port = +process.env.PORT || 8788, host = process.env.HOST || '127.0.0.1';
-  createServer().listen(port, host, () => console.log(`Aula on http://${host}:${port}`));
+  const port = +process.env.PORT || 8788, host = process.env.HOST || '127.0.0.1', server = createServer();
+  if (process.argv[2] === 'reset-password') {
+    const pw = server.resetPassword(process.argv[3]);
+    console.log(pw ? `New password for ${process.argv[3]}: ${pw}` : `No user named ${process.argv[3]}`);
+    process.exit(pw ? 0 : 1);
+  }
+  server.listen(port, host, () => console.log(`Aula on http://${host}:${port}`));
 }
