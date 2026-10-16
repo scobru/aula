@@ -1,3 +1,10 @@
+/* Roboto is bundled (web/fonts, OFL): the old stack named 'Google Sans', which almost nobody has, so text fell back to a different system font on every OS. */
+@font-face { font-family: Roboto; font-weight: 400; font-style: normal; font-display: swap; src: url(/fonts/roboto-latin-ext-400-normal.woff2) format('woff2'); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: Roboto; font-weight: 400; font-style: normal; font-display: swap; src: url(/fonts/roboto-latin-400-normal.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: Roboto; font-weight: 500; font-style: normal; font-display: swap; src: url(/fonts/roboto-latin-ext-500-normal.woff2) format('woff2'); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: Roboto; font-weight: 500; font-style: normal; font-display: swap; src: url(/fonts/roboto-latin-500-normal.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: Roboto; font-weight: 700; font-style: normal; font-display: swap; src: url(/fonts/roboto-latin-ext-700-normal.woff2) format('woff2'); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: Roboto; font-weight: 700; font-style: normal; font-display: swap; src: url(/fonts/roboto-latin-700-normal.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
 :root {
   --bg: #fff; --fg: #202124; --muted: #5f6368; --line: #dadce0; --hover: #f1f3f4; --card: #fff;
   --accent: #1a73e8; --accent-bg: #e8f0fe; --sel: #d3e3fd; --ok: #137333; --err: #c5221f; --ico: #e8eaed; --mark: #0d7377; --shadow: 0 1px 3px rgba(60,64,67,.3), 0 4px 8px 3px rgba(60,64,67,.15);
@@ -7,7 +14,15 @@
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 'Google Sans', Roboto, system-ui, -apple-system, 'Segoe UI', sans-serif; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 14px/1.5 Roboto, system-ui, -apple-system, 'Segoe UI', sans-serif; letter-spacing: .01em;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; /* macOS only: Windows/Linux text is smoothed by the OS */
+  text-rendering: optimizeLegibility; font-kerning: normal; font-synthesis: none;
+}
+h1, h2, h3, .logo { letter-spacing: 0; }
+svg { flex: none; shape-rendering: geometricPrecision; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 h1 { font-size: 28px; font-weight: 400; margin: 0 0 8px; }
