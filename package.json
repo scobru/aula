@@ -1,7 +1,7 @@
 {
   "name": "aula",
-  "version": "0.1.0",
-  "description": "Self-hosted, open source alternative to Google Classroom: classes, announcements, assignments, submissions, grades",
+  "version": "0.2.0",
+  "description": "Self-hosted, open source alternative to Google Classroom: classes, assignments, quizzes, grades, comments",
   "type": "module",
   "bin": { "aula": "server.js" },
   "engines": { "node": ">=22.5" },
