@@ -13,7 +13,14 @@ npm test          # adapter tests (node) + contract tests (cargo)
 npm run build     # needs rust + the wasm32-unknown-unknown target
 ```
 
-Publishing the `web/` folder as a Freenet website is done like Orto does it (`fdev website update web --key aula`); it has not been run for Aula.
+To publish, build the folder to upload and give it to `fdev`, as Orto does (`fdev website update <folder> --key aula`):
+
+```bash
+cd freenet && npm run dist     # freenet/dist = web/ with freenet.html as index.html
+fdev website update dist --key aula
+```
+
+The contract serves `index.html`, so `web/index.html` (the server page, absolute paths, no Freenet code) must not be what you upload.
 
 ## What works
 
