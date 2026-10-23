@@ -46,7 +46,10 @@ function postFields(kind, b) {
   };
 }
 
-export function createApi(store, { storage = globalThis.localStorage, onChange = () => {}, refreshMs = 5000 } = {}) {
+// a sandboxed iframe (Freenet web contracts) throws on merely reading localStorage; then nothing is remembered and you log in again
+const browserStorage = () => { try { return globalThis.localStorage; } catch { return null; } };
+
+export function createApi(store, { storage = browserStorage(), onChange = () => {}, refreshMs = 5000 } = {}) {
   const mem = new Map();
   const disk = storage ?? { getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v), removeItem: k => mem.delete(k) };
   const get = (k, d) => { try { return JSON.parse(disk.getItem(k)) ?? d; } catch { return d; } };
@@ -62,6 +65,11 @@ export function createApi(store, { storage = globalThis.localStorage, onChange =
       const id = await classId(i);
       if (!(S.index.includes(id) || await load(id))) break;
       if (!S.index.includes(id)) S.index.push(id);
+    }
+    // a new device has no saved name: take the one already published in the classes
+    if (!name) for (const id of S.index) {
+      const st = cache.get(id), mine = id.slice(0, 64) === S.pk ? J(st?.records['meta:class'] ?? { data: '{}' }).owner : J(st?.records['member:' + S.pk] ?? { data: '{}' }).name;
+      if (mine) { S.name = mine; break; }
     }
     S.save();
     set('aula-profile', { username: S.username, name: S.name });
