@@ -112,6 +112,8 @@ export const store = {
   },
 };
 
+console.info("Aula: page loaded"); // seen again after every click = the node's page reloads on navigation
+
 // ---------------------------------------------------------------- identity delegate
 // A small module kept by the node, one store per calling web app (FreeNames' identity delegate, see delegate/README.md). It keeps the key,
 // the session and the pending Viso sign-in across reloads and the redirect to Viso, even inside the sandboxed page that has no storage.

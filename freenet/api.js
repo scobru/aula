@@ -31,9 +31,9 @@ function postFields(kind, b) {
   };
 }
 
-// Where the device key and session are kept. A sandboxed iframe (Freenet web contracts) throws on merely reading localStorage: there they
-// go to window.name, which survives reloads (and the Viso round trip) but is readable by pages this tab visits later; log out and "forget" clear it.
-// shortcut: window.name for the secret; the proper home is a Freenet identity delegate (what FreeNames uses).
+// Where the device key and session are kept when the node has no identity delegate (see `kv` below). A sandboxed iframe (Freenet web contracts)
+// throws on merely reading localStorage: there they go to window.name, which survives a reload of the same frame but not a recreated one, and is
+// readable by pages this tab visits later; log out and "forget" clear it.
 function browserStorage() {
   try { localStorage.getItem('aula-probe'); return localStorage; } catch { /* sandboxed */ }
   if (typeof window === 'undefined') return null;
@@ -53,36 +53,36 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
   let S = null; // { sk, dev, pk, cert, tag, name, index }
 
   // `kv` resolves to { get(key) -> string | null, put(key, value) } kept by the node (the identity delegate): it survives reloads and the
-  // Viso round trip even where the page has no storage. Writes are remembered here at once and sent in the background; flush() waits for them.
-  const FIXED = ['aula-key', 'aula-session', 'aula-profile', 'aula-pending', 'aula-locked'];
+  // Viso round trip even where the page has no storage. Everything the page keeps is one JSON value there (a delegate call is slow and they
+  // go one at a time, and the page may reload on every click), remembered here at once and sent in the background; flush() waits for it.
+  const STATE = 'aula-state';
+  const FIXED = ['aula-key', 'aula-session', 'aula-profile', 'aula-pending', 'aula-locked']; // the first delegate version kept one entry each
   const kvMem = new Map(), puts = new Set();
   let kvd = null, lost = null;
-  const send = (key, value) => {
-    const p = kvd.put(key, value).catch(e => { lost = e; });
+  const send = value => {
+    const p = kvd.put(STATE, value).catch(e => { lost = e; });
     puts.add(p);
     p.then(() => puts.delete(p));
   };
+  const save = () => send(JSON.stringify(Object.fromEntries(kvMem)));
   const flush = async () => {
     await Promise.all([...puts]);
     if (lost) { const e = lost; lost = null; throw e; }
   };
-  const warm = async key => { // a key only known once the user is (the class list of a persona)
-    if (kvd && !kvMem.has(key)) { const v = await kvd.get(key).catch(() => null); if (v) kvMem.set(key, v); }
-  };
   async function useKv(k) {
     kvd = k;
     try {
-      for (const key of FIXED) { // what an earlier version or the fallback holds moves into the node
-        const v = (await k.get(key).catch(() => null)) || fallback.getItem(key);
-        if (v) { kvMem.set(key, v); if (!(await k.get(key).catch(() => null))) send(key, v); }
-      }
-      await flush();
-    } catch (e) { kvd = null; throw e; }
-    FIXED.forEach(key => { try { fallback.removeItem(key); } catch {} });
+      // a read that fails must not look like "nothing saved": the next write would replace the saved key
+      const blob = await k.get(STATE);
+      const data = blob ? JSON.parse(blob) : {};
+      if (!blob) for (const key of FIXED) { const v = (await k.get(key)) || fallback.getItem(key); if (v) data[key] = v; } // an earlier version, or the tab
+      for (const [key, v] of Object.entries(data)) kvMem.set(key, v);
+      if (!blob && kvMem.size) { save(); await flush(); FIXED.forEach(key => { try { fallback.removeItem(key); } catch {} }); }
+    } catch (e) { kvd = null; kvMem.clear(); throw e; }
     disk = {
       getItem: key => kvMem.get(key) ?? null,
-      setItem: (key, v) => { kvMem.set(key, v); send(key, v); },
-      removeItem: key => { kvMem.delete(key); send(key, ''); },
+      setItem: (key, v) => { if (kvMem.get(key) !== v) { kvMem.set(key, v); save(); } },
+      removeItem: key => { if (kvMem.delete(key)) save(); },
     };
   }
   const ready = (async () => {
@@ -94,26 +94,30 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
   const where = () => app ?? { origin: `${location.protocol}//${location.host}`, path: location.pathname.replace(/[^/]*$/, '') };
   const base = () => where().origin + where().path;
 
-  async function start(sk) {
+  async function start(sk, wait = true) {
     if (!isSecret(sk)) fail('Unauthorized', 401);
     const dev = await keysOf(sk), session = get('aula-session', null);
     if (session && session.cert.challenge.split('.')[1] !== dev.pk) fail('Unauthorized', 401); // the device key changed: sign in again
     const pk = session ? session.persona : dev.pk, idx = `aula-classes-${pk}`, name = get('aula-profile', {}).name;
-    await warm(idx);
     S = { sk, dev, pk, cert: session?.cert ?? null, tag: await appTag(where().path), name: name || pk.slice(0, 8), index: get(idx, []), save() { set(idx, this.index); } };
-    // a teacher's classes have derived addresses, so a new device with the same key finds them again; students rejoin with the code
-    for (let i = 0; ; i++) {
-      const id = await classId(i);
-      if (!(S.index.includes(id) || await load(id))) break;
-      if (!S.index.includes(id)) S.index.push(id);
-    }
-    // a new device has no saved name: take the one already published in the classes
-    if (!name) for (const id of S.index) {
-      const st = cache.get(id), mine = id.slice(0, 64) === S.pk ? J(st?.records['meta:class'] ?? { data: '{}' }).owner : J(st?.records['member:' + S.pk] ?? { data: '{}' }).name;
-      if (mine) { S.name = mine; break; }
-    }
-    S.save();
-    set('aula-profile', { name: S.name });
+    // a teacher's classes have derived addresses, so a new device with the same key finds them again; students rejoin with the code.
+    // Resuming a known identity does not wait for it: the saved list is enough, and what is new shows up when it is found.
+    const mine = S, found = (async () => {
+      for (let i = 0; ; i++) {
+        const id = await classId(i);
+        if (!(mine.index.includes(id) || await load(id))) break;
+        if (!mine.index.includes(id)) mine.index.push(id);
+      }
+      // a new device has no saved name: take the one already published in the classes
+      if (!name) for (const id of mine.index) {
+        const st = cache.get(id), n = id.slice(0, 64) === mine.pk ? J(st?.records['meta:class'] ?? { data: '{}' }).owner : J(st?.records['member:' + mine.pk] ?? { data: '{}' }).name;
+        if (n) { mine.name = n; break; }
+      }
+      mine.save();
+      set('aula-profile', { name: mine.name });
+    })();
+    if (wait) await found;
+    else found.then(() => onChange(), () => {});
   }
   const classId = async i => S.pk + hex((await sha256(unhex(S.sk), enc.encode('class'), enc.encode(String(i)))).slice(0, 16)) + S.tag;
 
@@ -136,7 +140,16 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
     saved: () => (get('aula-locked', false) ? null : get('aula-key', null)),
     /** Whether there is a key to continue with (after a log out). */
     hasKey: () => !!get('aula-key', null),
-    resume: () => begin(get('aula-key', ''), get('aula-session', null), ''),
+    async resume() { // a page reload with a known identity: nothing to rewrite, nothing to wait for
+      await ready;
+      const sk = get('aula-key', '');
+      if (get('aula-locked', false)) del('aula-locked');
+      S = null;
+      cache.clear();
+      await start(sk, false);
+      await persist();
+      return sk;
+    },
     create: name => begin(newSecret(), null, name),
     async import(secret, name) {
       const sk = str(secret).replace(/\s/g, '').toLowerCase();
@@ -166,7 +179,7 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
       return begin(pending.sk, { persona: pk, cert }, pending.name);
     },
     backup: () => get('aula-key', null),
-    async forget() { await ready; S = null; cache.clear(); FIXED.forEach(del); await persist(); },
+    async forget() { await ready; const idx = S && `aula-classes-${S.pk}`; S = null; cache.clear(); [...FIXED, idx].forEach(k => k && del(k)); await persist(); },
   };
 
   const newer = (a, b) => a.updated_at > b.updated_at || (a.updated_at === b.updated_at && a.sig > b.sig);
@@ -385,7 +398,7 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
 
   const api = async function (url, method = 'GET', body = {}, token = '') {
     await ready;
-    if (!S && token) await start(token);
+    if (!S && token) await start(token, false);
     if (!S) fail('Unauthorized', 401);
     for (const [m, re, fn] of routes) {
       const hit = m === method && re.exec(url.split('?')[0]);
