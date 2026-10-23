@@ -80,6 +80,19 @@ test('same username and password on a new device finds the teacher classes again
   await assert.rejects(B('/login', 'POST', { username: 'prof', password: 'short' }), /8 characters/);
 });
 
+test('sandboxed iframe: no localStorage, the name comes back from the classes', async () => {
+  const store = memoryStore(), A = client(store);
+  await login(A, 'prof', 'Prof Rossi');
+  await A('/classes', 'POST', { name: 'One' });
+  const real = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new DOMException('sandboxed', 'SecurityError'); } });
+  try {
+    const B = createApi(store, { refreshMs: 0 }); // default storage must not throw
+    await B('/login', 'POST', { username: 'prof', password: 'correct horse' });
+    assert.equal((await B('/me')).name, 'Prof Rossi');
+  } finally { real ? Object.defineProperty(globalThis, 'localStorage', real) : delete globalThis.localStorage; }
+});
+
 test('username is case-insensitive, password is not', async () => {
   assert.equal(await seedFor('prof', 'correct horse'), await seedFor('Prof', 'correct horse'));
   assert.notEqual(await seedFor('prof', 'correct horse'), await seedFor('prof', 'correct horsf'));
