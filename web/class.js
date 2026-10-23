@@ -170,7 +170,7 @@ function settings(c, cid) {
   const cls = c.class, name = h('input', { value: cls.name, required: true, placeholder: t('Class name') }), section = h('input', { value: cls.section || '', placeholder: t('Section') });
   return h('div', { class: 'narrow' }, h('h2', {}, t('Settings')),
     h('form', { class: 'card', onsubmit: safe(async e => { e.preventDefault(); await api('/classes/' + cid, 'PATCH', { name: name.value, section: section.value }); rerender(); }) }, name, section, h('div', { class: 'actions' }, h('button', { class: 'pill' }, t('Save')))),
-    h('div', { class: 'card' }, h('p', {}, t('Student code'), ': ', h('strong', {}, cls.code)), h('p', {}, t('Co-teacher code'), ': ', h('strong', {}, cls.teacher_code))),
+    h('div', { class: 'card' }, h('p', {}, t('Student code'), ': ', h('strong', {}, cls.code)), cls.teacher_code ? h('p', {}, t('Co-teacher code'), ': ', h('strong', {}, cls.teacher_code)) : null),
     h('div', { class: 'row' }, h('button', { class: 'pill', onclick: safe(async () => { await api('/classes/' + cid, 'PATCH', { archived: !cls.archived }); rerender(); }) }, cls.archived ? t('Unarchive') : t('Archive')),
       cls.owner ? h('button', { class: 'pill danger', onclick: safe(async () => { if (confirm(t('Delete this class and everything in it?'))) { await api('/classes/' + cid, 'DELETE'); location.hash = '#/'; } }) }, t('Delete class')) : null));
 }
