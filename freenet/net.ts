@@ -112,6 +112,11 @@ export const store = {
   },
 };
 
+// The address bar belongs to the shell, so tell it where we are (it keeps the fragment on reload and for back/forward; replaceState, no reload).
+const showRoute = () => globalThis.parent?.postMessage({ __freenet_shell__: true, type: "hash", hash: globalThis.location.hash || "#/" }, "*");
+globalThis.addEventListener("hashchange", showRoute);
+showRoute();
+
 console.info("Aula: page loaded"); // seen again after every click = the node's page reloads on navigation
 
 // ---------------------------------------------------------------- identity delegate

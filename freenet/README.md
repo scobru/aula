@@ -17,7 +17,7 @@ No server, no password. Three ways in:
 
 Log out keeps the key on this device ("Continue with the key saved here"); "Forget the saved key" removes it. The key, the session and the pending Viso sign-in are kept by the node itself, in the identity delegate of [FreeNames](https://github.com/scobru/freenames) (`delegate/`): that is what survives reloads and the redirect to Viso inside the sandboxed page, which has no `localStorage`. If the node has no delegate support, they stay in the tab (`window.name`: survives reloads, readable by pages the tab visits later) and the Viso round trip may not work.
 
-If the page shows "Connecting to your Freenet node…" after every click, the node's page is reloading on each navigation (the console prints "Aula: page loaded" each time): the app then starts again from what the node's delegate keeps, in one read, and takes the class list from the saved copy while it looks for new classes in the background.
+The node injects a script into the page that takes over every same-origin link click (`navigation_interceptor.js` in freenet-core) and asks the shell to reload the frame with the new address, which drops everything in memory. In-page routes (`#/...`) do not need that, so `web/lib.js` marks those links `data-freenet-no-intercept`, and `net.ts` tells the shell the current fragment so the address bar and reload keep the position. If "Connecting to your Freenet node…" shows after every click anyway, the console prints "Aula: page loaded" each time: some link is not marked.
 
 Keep the same site key when you publish updates: classes are bound to the page's address, and a new address means new class addresses and delegations that no longer match.
 
