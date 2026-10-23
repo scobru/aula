@@ -8,6 +8,8 @@ try { state.token = localStorage.getItem('aula') || ''; } catch {}
 export const h = (tag, p = {}, ...kids) => {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(p)) k.startsWith('on') ? e.addEventListener(k.slice(2), v) : k === 'class' ? (e.className = v) : k.includes('-') ? e.setAttribute(k, v) : (e[k] = v);
+  // a Freenet node turns every link click into a reload of the page unless told not to; in-page routes need no reload
+  if (tag === 'a' && typeof p.href === 'string' && p.href[0] === '#') e.setAttribute('data-freenet-no-intercept', '1');
   if (e.placeholder && !e.getAttribute('aria-label')) e.setAttribute('aria-label', e.placeholder);
   e.append(...kids.flat(Infinity).filter(x => x != null && x !== false));
   return e;
