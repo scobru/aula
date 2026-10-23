@@ -5,7 +5,8 @@
   "scripts": {
     "build": "npm run build:wasm && esbuild net.ts --bundle --minify --format=iife --outfile=../web/freenet-net.js",
     "test": "node --no-warnings --test test.js && cargo test --manifest-path contract/Cargo.toml",
-    "build:wasm": "cargo build --release --manifest-path contract/Cargo.toml --target wasm32-unknown-unknown && cp contract/target/wasm32-unknown-unknown/release/aula_class.wasm ../web/aula_class.wasm"
+    "build:wasm": "cargo build --release --manifest-path contract/Cargo.toml --target wasm32-unknown-unknown && cp contract/target/wasm32-unknown-unknown/release/aula_class.wasm ../web/aula_class.wasm",
+    "dist": "npm run build && node -e \"import('node:fs').then(f=>{f.rmSync('dist',{recursive:true,force:true});f.cpSync('../web','dist',{recursive:true});f.renameSync('dist/freenet.html','dist/index.html')})\""
   },
   "devDependencies": {
     "@freenetorg/freenet-stdlib": "^0.4.0",
