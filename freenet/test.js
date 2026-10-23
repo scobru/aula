@@ -205,7 +205,7 @@ test('node-kept store: a key written before the node answered is moved into it',
   const A = client(memoryStore(), { kv: fakeKv(node), storage: { getItem: k => old.get(k) ?? null, setItem: (k, v) => old.set(k, v), removeItem: k => old.delete(k) } });
   await A.ready;
   assert.equal(A.id.saved(), 'ab'.repeat(32));
-  assert.equal(node.get('aula-key'), JSON.stringify('ab'.repeat(32)));
+  assert.equal(JSON.parse(node.get('aula-state'))['aula-key'], JSON.stringify('ab'.repeat(32)));
   assert.equal(old.has('aula-key'), false);
 });
 
@@ -213,11 +213,35 @@ test('node-kept store: a node that refuses writes fails loudly, a node without d
   const bad = client(memoryStore(), { kv: fakeKv(new Map(), { failPut: true }) });
   await bad.ready;
   await assert.rejects(bad.id.create('Ada'), /Could not save this to the Freenet node \(node said no\)/);
-  const late = client(memoryStore(), { kv: async () => ({ get: async () => null, put: async (k) => { if (k === 'aula-pending') throw new Error('full'); } }) });
+  const late = client(memoryStore(), { kv: async () => ({ get: async () => null, put: async (k, v) => { if (JSON.parse(v)['aula-pending']) throw new Error('full'); } }) }); // only the pending sign-in is refused
   await late.ready;
   await assert.rejects(late.id.visoUrl('Ada'), /Could not save this to the Freenet node/);
   const none = client(memoryStore(), { kv: async () => { throw new Error('no delegate support'); } });
   await none.ready;
   assert.equal(none.id.saved(), null);
   assert.equal(none.id.saved() === null && (await none.id.create('Ada')).length, 64);
+});
+
+test('node-kept store: a reload rewrites nothing, a failed read never overwrites the saved key, the first delegate layout is migrated', async () => {
+  const store = memoryStore(), node = new Map(); let puts = 0;
+  const counted = async () => { const k = await fakeKv(node)(); return { get: k.get, put: (key, v) => { puts++; return k.put(key, v); } }; };
+  const A = client(store, { kv: counted }); await A.ready;
+  const sk = await A.id.create('Ada');
+  await A('/classes', 'POST', { name: 'One' }, sk);
+  const before = puts, saved = node.get('aula-state');
+  const B = client(store, { kv: counted }); await B.ready;
+  assert.equal(await B.id.resume(), sk);
+  assert.equal((await B('/classes', 'GET', undefined, sk)).length, 1);
+  assert.equal(puts, before, 'resuming a known identity writes nothing');
+  assert.equal(node.get('aula-state'), saved);
+  // the node does not answer the read: its state must be left alone, the tab takes over
+  const C = client(store, { kv: async () => ({ get: async () => { throw new Error('delegate timeout'); }, put: async () => { puts++; } }) });
+  await C.ready;
+  assert.equal(await C.id.create('Other'), C.id.backup());
+  assert.equal(puts, before, 'nothing was written to a node whose state could not be read');
+  // the first delegate version kept one entry per key
+  const old = new Map([['aula-key', JSON.stringify('cd'.repeat(32))], ['aula-profile', JSON.stringify({ name: 'Old' })]]);
+  const D = client(store, { kv: fakeKv(old) }); await D.ready;
+  assert.equal(D.id.saved(), 'cd'.repeat(32));
+  assert.equal(JSON.parse(old.get('aula-state'))['aula-key'], JSON.stringify('cd'.repeat(32)));
 });
