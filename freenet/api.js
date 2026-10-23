@@ -1,32 +1,17 @@
-// Aula on Freenet: the server's JSON API (`api(url, method, body)`), answered from signed records in one contract per class.
-// Identity = Ed25519 key derived from username + password, so the same login on another device is the same person.
+// Aula on Freenet: the server's JSON API (`api(url, method, body, token)`), answered from signed records in one contract per class.
+// Identity = a local Ed25519 key (one click, backed up by the user), or a Viso (whoiam) persona that delegates a disposable key of this device.
 // `store` is { get(id) -> state | null, push(id, delta, exists) } (net.ts on Freenet, a Map in tests). See contract/src/lib.rs for the rules.
+import { hex, unhex, newSecret, isSecret, sha256, keysOf, appTag, verifyProof } from './identity.js';
+
 const enc = new TextEncoder();
-const subtle = globalThis.crypto.subtle;
-const hex = u8 => [...u8].map(b => b.toString(16).padStart(2, '0')).join('');
-const unhex = h => Uint8Array.from(h.match(/../g) ?? [], b => parseInt(b, 16));
-const PKCS8 = '302e020100300506032b657004220420'; // wraps a raw 32-byte Ed25519 seed
 const NA = 'Not available on Freenet yet';
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
 const str = v => (typeof v === 'string' ? v.trim() : '');
-const sha = async (...parts) => new Uint8Array(await subtle.digest('SHA-256', new Uint8Array(parts.flatMap(p => [...p]))));
 const msg = (id, key, r) => `aula1|${id}|${key}|${r.by}|${r.updated_at}|${r.deleted}|${r.data}`; // must match record_msg in the contract
 const J = r => { try { return JSON.parse(r.data); } catch { return {}; } };
 const rid = () => hex(crypto.getRandomValues(new Uint8Array(8)));
-
-// shortcut: password-derived keys are only as strong as the password (the public key is on the network); upgrade to a stored key or passkey
-export async function seedFor(username, password) {
-  const base = await subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
-  const salt = enc.encode('aula-freenet|' + username.toLowerCase());
-  return hex(new Uint8Array(await subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 600000 }, base, 256)));
-}
-
-async function keysOf(seed) {
-  const priv = await subtle.importKey('pkcs8', unhex(PKCS8 + seed), 'Ed25519', true, ['sign']);
-  const { x } = await subtle.exportKey('jwk', priv);
-  const pk = hex(Uint8Array.from(atob(x.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)));
-  return { pk, sign: async m => hex(new Uint8Array(await subtle.sign('Ed25519', priv, enc.encode(m)))) };
-}
+const VISO_KEY = 'GzHy3jnEtj26EoGqMsBpoawcY378hK9kp91rTcNYiAac'; // the official Viso web contract
+const PROOF_MAX_AGE_MS = 10 * 60 * 1000;
 
 // same checks as the server's postFields; duplicated because server.js cannot run in a browser
 function postFields(kind, b) {
@@ -46,21 +31,37 @@ function postFields(kind, b) {
   };
 }
 
-// a sandboxed iframe (Freenet web contracts) throws on merely reading localStorage; then nothing is remembered and you log in again
-const browserStorage = () => { try { return globalThis.localStorage; } catch { return null; } };
+// Where the device key and session are kept. A sandboxed iframe (Freenet web contracts) throws on merely reading localStorage: there they
+// go to window.name, which survives reloads (and the Viso round trip) but is readable by pages this tab visits later; log out and "forget" clear it.
+// shortcut: window.name for the secret; the proper home is a Freenet identity delegate (what FreeNames uses).
+function browserStorage() {
+  try { localStorage.getItem('aula-probe'); return localStorage; } catch { /* sandboxed */ }
+  if (typeof window === 'undefined') return null;
+  const read = () => { try { const j = JSON.parse(window.name); return j?.__aula__ ? j.data : {}; } catch { return {}; } };
+  const write = d => { window.name = JSON.stringify({ __aula__: true, data: d }); };
+  return { getItem: k => read()[k] ?? null, setItem: (k, v) => write({ ...read(), [k]: v }), removeItem: k => { const d = read(); delete d[k]; write(d); } };
+}
 
-export function createApi(store, { storage = browserStorage(), onChange = () => {}, refreshMs = 5000 } = {}) {
+export function createApi(store, { storage = browserStorage(), onChange = () => {}, refreshMs = 5000, app, viso = VISO_KEY } = {}) {
   const mem = new Map();
   const disk = storage ?? { getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v), removeItem: k => mem.delete(k) };
   const get = (k, d) => { try { return JSON.parse(disk.getItem(k)) ?? d; } catch { return d; } };
   const set = (k, v) => { try { disk.setItem(k, JSON.stringify(v)); } catch {} };
+  const del = k => { try { disk.removeItem(k); } catch {} };
   const cache = new Map(), checked = new Map();
-  let S = null; // { seed, pk, sign, username, name, index }
+  let S = null; // { sk, dev, pk, cert, tag, name, index }
 
-  async function start(seed, username, name) {
-    const k = await keysOf(seed), idx = `aula-classes-${k.pk}`;
-    S = { seed, ...k, username, name: name || username, index: get(idx, []), save() { set(idx, this.index); } };
-    // a teacher's classes have derived addresses, so a new device finds them again; students rejoin with the code
+  // the app's own address: delegations and class addresses are bound to its path
+  const where = () => app ?? { origin: `${location.protocol}//${location.host}`, path: location.pathname.replace(/[^/]*$/, '') };
+  const base = () => where().origin + where().path;
+
+  async function start(sk) {
+    if (!isSecret(sk)) fail('Unauthorized', 401);
+    const dev = await keysOf(sk), session = get('aula-session', null);
+    if (session && session.cert.challenge.split('.')[1] !== dev.pk) fail('Unauthorized', 401); // the device key changed: sign in again
+    const pk = session ? session.persona : dev.pk, idx = `aula-classes-${pk}`, name = get('aula-profile', {}).name;
+    S = { sk, dev, pk, cert: session?.cert ?? null, tag: await appTag(where().path), name: name || pk.slice(0, 8), index: get(idx, []), save() { set(idx, this.index); } };
+    // a teacher's classes have derived addresses, so a new device with the same key finds them again; students rejoin with the code
     for (let i = 0; ; i++) {
       const id = await classId(i);
       if (!(S.index.includes(id) || await load(id))) break;
@@ -72,9 +73,54 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
       if (mine) { S.name = mine; break; }
     }
     S.save();
-    set('aula-profile', { username: S.username, name: S.name });
+    set('aula-profile', { name: S.name });
   }
-  const classId = async i => S.pk + hex((await sha(unhex(S.seed), enc.encode('class'), enc.encode(String(i)))).slice(0, 16));
+  const classId = async i => S.pk + hex((await sha256(unhex(S.sk), enc.encode('class'), enc.encode(String(i)))).slice(0, 16)) + S.tag;
+
+  // what the sign-in screen drives; the secret returned is the token the UI keeps
+  async function begin(sk, session, name) {
+    S = null;
+    cache.clear();
+    set('aula-key', sk);
+    session ? set('aula-session', session) : del('aula-session');
+    if (str(name)) set('aula-profile', { name: str(name).slice(0, 100) });
+    del('aula-locked');
+    await start(sk);
+    return sk;
+  }
+  const identity = {
+    /** The device key kept in this browser, unless the user logged out. */
+    saved: () => (get('aula-locked', false) ? null : get('aula-key', null)),
+    /** Whether there is a key to continue with (after a log out). */
+    hasKey: () => !!get('aula-key', null),
+    resume: () => begin(get('aula-key', ''), get('aula-session', null), ''),
+    create: name => begin(newSecret(), null, name),
+    async import(secret, name) {
+      const sk = str(secret).replace(/\s/g, '').toLowerCase();
+      if (!isSecret(sk)) fail('The key must be 64 hexadecimal characters.');
+      return begin(sk, null, name);
+    },
+    /** The address to send the user to; Viso comes back to this page with ?pk=&challenge=&ts=&sig=. */
+    async visoUrl(name) {
+      const sk = newSecret(), challenge = `wd1.${(await keysOf(sk)).pk}.${newSecret().slice(0, 32)}`;
+      set('aula-pending', { sk, challenge, name: str(name).slice(0, 100) });
+      return `${where().origin}/v1/contract/web/${viso}/?connect=v1&challenge=${challenge}&return=${encodeURIComponent(base())}`;
+    },
+    /** Viso's callback: check it is the sign-in we started, fresh, and signed by the persona; then keep the delegation. */
+    async finishViso(q) {
+      if (q.get('viso') === 'denied' || q.get('whoiam') === 'denied') fail('You chose not to share a persona.');
+      const pending = get('aula-pending', null);
+      del('aula-pending'); // one use, whatever happens next
+      const proof = { pk: q.get('pk') ?? '', challenge: q.get('challenge') ?? '', ts: Number(q.get('ts')), sig: q.get('sig') ?? '', base: base() };
+      if (!pending || proof.challenge !== pending.challenge) fail('This sign-in is unknown or was already used. Start again.');
+      if (!Number.isFinite(proof.ts) || Math.abs(Date.now() - proof.ts) > PROOF_MAX_AGE_MS) fail('The proof is too old or the clock is off. Start again.');
+      if (!(await verifyProof(proof))) fail('The Viso signature does not verify.');
+      const { pk, ...cert } = proof;
+      return begin(pending.sk, { persona: pk, cert }, pending.name);
+    },
+    backup: () => get('aula-key', null),
+    forget() { S = null; cache.clear(); ['aula-key', 'aula-session', 'aula-profile', 'aula-pending', 'aula-locked'].forEach(del); },
+  };
 
   const newer = (a, b) => a.updated_at > b.updated_at || (a.updated_at === b.updated_at && a.sig > b.sig);
   function absorb(id, st) {
@@ -102,8 +148,8 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
   async function write(id, items) {
     const exists = cache.has(id), st = cache.get(id) ?? { records: {} }, delta = { records: {}, updated_at: 0 };
     for (const [key, data, deleted = false] of items) {
-      const r = { data: JSON.stringify(data), updated_at: Math.max(Date.now(), (st.records[key]?.updated_at ?? 0) + 1), deleted, by: S.pk, sig: '' };
-      r.sig = await S.sign(msg(id, key, r));
+      const r = { data: JSON.stringify(data), updated_at: Math.max(Date.now(), (st.records[key]?.updated_at ?? 0) + 1), deleted, by: S.pk, sig: '', cert: S.cert };
+      r.sig = await S.dev.sign(msg(id, key, r));
       delta.records[key] = r;
       delta.updated_at = Math.max(delta.updated_at, r.updated_at);
     }
@@ -163,24 +209,16 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
 
   const routes = [];
   const route = (method, p, fn) => routes.push([method, new RegExp('^' + p.replace(/:\w+/g, '([^/]+)') + '$'), fn]);
-  const login = async b => {
-    const username = str(b.username).toLowerCase(), password = typeof b.password === 'string' ? b.password : '';
-    if (!username || password.length < 8) fail('Username and a password of at least 8 characters required');
-    await start(await seedFor(username, password), username, str(b.name) || get('aula-profile', {}).name);
-    return { token: S.seed };
-  };
-  route('POST', '/register', ({ body }) => login(body));
-  route('POST', '/login', ({ body }) => login(body));
-  route('POST', '/logout', () => { S = null; cache.clear(); });
-  route('GET', '/me', () => ({ id: S.pk, name: S.name, username: S.username }));
+  route('POST', '/logout', () => { S = null; cache.clear(); set('aula-locked', true); }); // the key stays in this browser: "forget" removes it
+  route('GET', '/me', () => ({ id: S.pk, name: S.name, username: S.pk.slice(0, 12) }));
   route('PUT', '/me', async ({ body }) => {
     const name = str(body.name);
     if (!name) fail('Name required');
     S.name = name;
-    set('aula-profile', { username: S.username, name });
+    set('aula-profile', { name });
     await publishName();
   });
-  route('POST', '/password', () => fail('Your password is your key on Freenet: it cannot be changed'));
+  route('POST', '/password', () => fail('There is no password on Freenet: your key is your identity'));
   route('GET', '/notifications', () => ({ unread: 0, items: [] }));
   route('POST', '/notifications/read', () => {});
 
@@ -198,7 +236,7 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
   });
   route('POST', '/join', async ({ body }) => {
     const id = str(body.code).toLowerCase();
-    if (!/^[0-9a-f]{96}$/.test(id)) fail('No class with that code', 404);
+    if (!/^[0-9a-f]{112}$/.test(id)) fail('No class with that code', 404);
     const st = await load(id);
     if (!st) fail('No class with that code', 404);
     if (metaOf(st).archived) fail('Class is archived', 409);
@@ -298,14 +336,15 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
   for (const [m, p] of [['PUT', '/submissions/:id/grade'], ['POST', '/posts/:id/return'], ['POST', '/posts/:id/private'], ['POST', '/posts/:id/quiz'], ['GET', '/classes/:id/grades'],
     ['GET', '/classes/:id/grades.csv'], ['POST', '/classes/:id/members/:uid/reset'], ['POST', '/links'], ['POST', '/files']]) route(m, p, () => fail(NA));
 
-  return async function api(url, method = 'GET', body = {}, token = '') {
-    const path = url.split('?')[0];
-    if (!S && token && !/^\/(login|register)$/.test(path)) await start(token, get('aula-profile', {}).username ?? '', get('aula-profile', {}).name);
-    if (!S && !/^\/(login|register)$/.test(path)) fail('Unauthorized', 401);
+  const api = async function (url, method = 'GET', body = {}, token = '') {
+    if (!S && token) await start(token);
+    if (!S) fail('Unauthorized', 401);
     for (const [m, re, fn] of routes) {
-      const hit = m === method && re.exec(path);
+      const hit = m === method && re.exec(url.split('?')[0]);
       if (hit) return fn({ params: hit.slice(1).map(decodeURIComponent), body: body ?? {} });
     }
     return fail('Not found', 404);
   };
+  api.id = identity;
+  return api;
 }

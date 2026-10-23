@@ -18,6 +18,7 @@ import { ContractCodeT } from "@freenetorg/freenet-stdlib/common";
 import { RelatedContractsT } from "@freenetorg/freenet-stdlib/client-request";
 import { blake3 } from "@noble/hashes/blake3.js";
 import { createApi } from "./api.js";
+import "./auth.js";
 
 const TIMEOUT_MS = 15000;
 const withTimeout = <T>(p: Promise<T>): Promise<T> =>
