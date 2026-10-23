@@ -12,6 +12,7 @@ const langSelect = () => h('select', { 'aria-label': 'Language', onchange: e => 
 
 // ---------- auth ----------
 function authView() {
+  if (globalThis.AULA_AUTH) return globalThis.AULA_AUTH(app, { h, t, setToken, rerender, safe, langSelect }); // Freenet build
   let register = false;
   const draw = () => {
     const name = h('input', { placeholder: t('Name'), hidden: !register, autocomplete: 'name' });
@@ -117,6 +118,13 @@ async function notificationsPage() {
       : h('p', { class: 'muted' }, t('No notifications.'))) };
 }
 
+// Freenet build: the key is the identity, so this is where it is backed up
+function keyCard() {
+  const box = h('div', { class: 'code', hidden: true }, globalThis.AULA_API.id.backup() || '');
+  return [h('h2', {}, t('Your key')), h('div', { class: 'card' }, h('p', { class: 'muted' }, t('Whoever has this key is you. Keep a copy somewhere safe: it is the only way to get your classes back on another device.')),
+    box, h('button', { class: 'pill outline', type: 'button', onclick: () => { box.hidden = !box.hidden; } }, t('Show or hide the key')))];
+}
+
 function profilePage() {
   const name = h('input', { value: state.me.name, required: true, placeholder: t('Name') });
   const old = h('input', { type: 'password', placeholder: t('Current password'), required: true });
@@ -124,8 +132,8 @@ function profilePage() {
   const form = (fields, label, onSubmit) => h('form', { class: 'card', onsubmit: safe(async e => { e.preventDefault(); await onSubmit(); }) }, fields, h('div', { class: 'actions' }, h('button', { class: 'pill' }, label)));
   return { el: h('main', { class: 'page narrow' }, h('h1', {}, t('Settings')), h('p', { class: 'muted' }, state.me.username),
     form(name, t('Save'), async () => { await api('/me', 'PUT', { name: name.value }); rerender(); }),
-    h('h2', {}, t('Change password')),
-    form([old, next], t('Change password'), async () => { await api('/password', 'POST', { old: old.value, new: next.value }); alert(t('Password changed')); old.value = next.value = ''; })) };
+    globalThis.AULA_API?.id ? keyCard() : [h('h2', {}, t('Change password')),
+      form([old, next], t('Change password'), async () => { await api('/password', 'POST', { old: old.value, new: next.value }); alert(t('Password changed')); old.value = next.value = ''; })]) };
 }
 
 // ---------- router ----------

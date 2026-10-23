@@ -1,8 +1,11 @@
 //! Aula class contract on Freenet: one contract per class.
 //!
-//! Parameters = teacher_pubkey (32 bytes Ed25519) || salt (16 bytes). The class address (= hex parameters) is the join code.
+//! Parameters = teacher_pubkey (32 bytes Ed25519) || salt (16 bytes) || app tag (8 bytes: sha256 of the app path, first 8).
+//! The class address (= hex parameters) is the join code.
 //! Every record is signed on its own by its author (`by`), so a state is self-verifying and any subset travels as a delta:
 //!   signature over `aula1|<params hex>|<key>|<by>|<updated_at>|<deleted>|<data>`
+//! `by` is either the signing key itself, or a Viso (whoiam) persona with a `cert` that delegates a disposable app key
+//! for the app at the path the tag names; the app key then signs. So teachers and students can use either kind of identity.
 //! Who may write which key:
 //!   meta:class, post:<id>              teacher only
 //!   member:<pk>                        <pk> itself (join / leave) or the teacher (add / remove); a teacher tombstone is final
@@ -25,6 +28,8 @@ pub struct Record {
     pub deleted: bool,
     pub by: String,
     pub sig: String,
+    #[serde(default)]
+    pub cert: Option<whoiam_delegation::Cert>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -57,17 +62,41 @@ fn is_pk(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// `http://host:port/path` -> `/path`: the same app has a different host on every node.
+fn path_of(base: &str) -> Option<&str> {
+    let rest = base.strip_prefix("http://").or_else(|| base.strip_prefix("https://"))?;
+    Some(&rest[rest.find('/')?..])
+}
+
+/// First 8 bytes of sha256(app path), in hex: what the class parameters bind delegations to.
+pub fn app_tag(path: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(&Sha256::digest(path.as_bytes())[..8])
+}
+
 fn verify_sig(params: &str, key: &str, r: &Record) -> R<()> {
-    let pk: [u8; 32] = hex::decode(&r.by).map_err(|e| e.to_string())?.try_into().map_err(|_| "bad key")?;
-    let vk = ed25519_dalek::VerifyingKey::from_bytes(&pk).map_err(|e| format!("invalid key: {e}"))?;
-    let sg: [u8; 64] = hex::decode(&r.sig).map_err(|e| e.to_string())?.try_into().map_err(|_| "bad signature length")?;
-    vk.verify_strict(record_msg(params, key, r).as_bytes(), &ed25519_dalek::Signature::from_bytes(&sg))
-        .map_err(|e| format!("signature failed: {e}"))
+    let msg = record_msg(params, key, r);
+    match &r.cert {
+        None => {
+            let pk: [u8; 32] = hex::decode(&r.by).map_err(|e| e.to_string())?.try_into().map_err(|_| "bad key")?;
+            let vk = ed25519_dalek::VerifyingKey::from_bytes(&pk).map_err(|e| format!("invalid key: {e}"))?;
+            let sg: [u8; 64] = hex::decode(&r.sig).map_err(|e| e.to_string())?.try_into().map_err(|_| "bad signature length")?;
+            vk.verify_strict(msg.as_bytes(), &ed25519_dalek::Signature::from_bytes(&sg)).map_err(|e| format!("signature failed: {e}"))
+        }
+        Some(c) => {
+            let path = path_of(&c.base).ok_or("bad certificate")?;
+            if params[96..] != app_tag(path) {
+                return Err("certificate is for another app".into());
+            }
+            let app_key = whoiam_delegation::check(&r.by, path, c)?;
+            whoiam_delegation::verify(&app_key, msg.as_bytes(), &r.sig)
+        }
+    }
 }
 
 fn teacher_of(params: &str) -> R<&str> {
-    if params.len() != 96 || !is_pk(&params[..64]) {
-        return Err("parameters must be 48 bytes: teacher key + salt".into());
+    if params.len() != 112 || !params.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("parameters must be 56 bytes: teacher key + salt + app tag".into());
     }
     Ok(&params[..64])
 }
@@ -229,6 +258,8 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
 
+    const APP: &str = "/v1/contract/web/AulaApp/";
+
     fn sk(n: u8) -> SigningKey {
         SigningKey::from_bytes(&[n; 32])
     }
@@ -236,10 +267,10 @@ mod tests {
         hex::encode(k.verifying_key().to_bytes())
     }
     fn params(teacher: &SigningKey) -> String {
-        format!("{}11223344556677889900aabbccddeeff", pk(teacher))
+        format!("{}11223344556677889900aabbccddeeff{}", pk(teacher), app_tag(APP))
     }
     fn rec(k: &SigningKey, params: &str, key: &str, data: &str, ts: u64, deleted: bool) -> (String, Record) {
-        let mut r = Record { data: data.into(), updated_at: ts, deleted, by: pk(k), sig: String::new() };
+        let mut r = Record { data: data.into(), updated_at: ts, deleted, by: pk(k), sig: String::new(), cert: None };
         r.sig = hex::encode(k.sign(record_msg(params, key, &r).as_bytes()).to_bytes());
         (key.to_string(), r)
     }
@@ -343,18 +374,64 @@ mod tests {
         assert!(put(&p, ClassState::default(), vec![rec(&t, &p, "post:a|b", "x", 1, false)]).is_err());
     }
 
+    fn cert(persona: &SigningKey, base: &str, app: &SigningKey) -> whoiam_delegation::Cert {
+        let challenge = format!("wd1.{}.n1", pk(app));
+        let m = whoiam_delegation::connect_message(persona.verifying_key().as_bytes(), base, &challenge, 7);
+        whoiam_delegation::Cert { base: base.into(), challenge, ts: 7, sig: hex::encode(persona.sign(&m).to_bytes()) }
+    }
+    /// A record by `persona`, signed by its delegated `app` key.
+    fn drec(persona: &SigningKey, app: &SigningKey, base: &str, params: &str, key: &str, data: &str, ts: u64) -> (String, Record) {
+        let mut r = Record { data: data.into(), updated_at: ts, deleted: false, by: pk(persona), sig: String::new(), cert: Some(cert(persona, base, app)) };
+        r.sig = hex::encode(app.sign(record_msg(params, key, &r).as_bytes()).to_bytes());
+        (key.to_string(), r)
+    }
+    const BASE: &str = "http://127.0.0.1:7509/v1/contract/web/AulaApp/";
+
     #[test]
-    fn accepts_a_record_signed_by_the_browser_adapter() {
-        // produced by freenet/api.js (WebCrypto Ed25519) for seed 07*32; guards the signed-message format on both sides
-        let id = "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c00112233445566778899aabbccddeeff";
-        let r = Record {
-            data: r#"{"kind":"announcement","body":"hi"}"#.into(),
-            updated_at: 1700000000000,
-            deleted: false,
-            by: id[..64].into(),
-            sig: "0589bf84764150c2c3caadca7b300a9119b45162eaa0633abe3fad9e0a816a1d680aa243c5ce7e06820717c0055090297982d98082c85a5a3f67d99ca7025707".into(),
-        };
-        assert_eq!(pk(&sk(7)), id[..64]);
-        assert!(merge(id, ClassState::default(), st(vec![("post:a1".into(), r)])).is_ok());
+    fn viso_teacher_and_student_work_alongside_a_local_key_student() {
+        let (tp, ta, sp, sa, local) = (sk(1), sk(11), sk(2), sk(12), sk(3));
+        let p = params(&tp);
+        let c = put(&p, ClassState::default(), vec![drec(&tp, &ta, BASE, &p, "meta:class", "{}", 1), drec(&tp, &ta, BASE, &p, "post:a1", "hw", 2)]).unwrap();
+        let sub = format!("sub:a1:{}", pk(&sp));
+        let c = put(&p, c, vec![drec(&sp, &sa, BASE, &p, &format!("member:{}", pk(&sp)), "{}", 3), drec(&sp, &sa, BASE, &p, &sub, "done", 4)]).unwrap();
+        assert_eq!(c.records[&sub].by, pk(&sp));
+        assert!(put(&p, c, vec![rec(&local, &p, &format!("member:{}", pk(&local)), "{}", 5, false)]).is_ok());
+    }
+
+    #[test]
+    fn delegation_must_match_the_app_the_class_was_made_in() {
+        let (tp, ta) = (sk(1), sk(11));
+        let p = params(&tp);
+        let other_node = "http://10.0.0.5:7509/v1/contract/web/AulaApp/";
+        assert!(put(&p, ClassState::default(), vec![drec(&tp, &ta, other_node, &p, "post:a1", "x", 1)]).is_ok(), "same app on another node");
+        let other_app = "http://127.0.0.1:7509/v1/contract/web/Evil/";
+        assert!(put(&p, ClassState::default(), vec![drec(&tp, &ta, other_app, &p, "post:a1", "x", 1)]).is_err(), "delegation made for another app");
+    }
+
+    #[test]
+    fn delegation_cannot_be_used_for_someone_else_or_without_the_app_key() {
+        let (tp, ta, sp, sa) = (sk(1), sk(11), sk(2), sk(12));
+        let p = params(&tp);
+        // student's valid certificate, but the record claims to be the teacher
+        let (k, mut r) = drec(&sp, &sa, BASE, &p, "post:a1", "x", 1);
+        r.by = pk(&tp);
+        assert!(put(&p, ClassState::default(), vec![(k, r)]).is_err());
+        // right persona and certificate, signed by a key the certificate does not name
+        let (k, mut r) = drec(&tp, &ta, BASE, &p, "post:a1", "x", 1);
+        r.sig = hex::encode(sa.sign(record_msg(&p, "post:a1", &r).as_bytes()).to_bytes());
+        assert!(put(&p, ClassState::default(), vec![(k, r)]).is_err());
+        // an app key signing as the persona directly (no certificate)
+        let (k, mut r) = drec(&tp, &ta, BASE, &p, "post:a1", "x", 1);
+        r.cert = None;
+        assert!(put(&p, ClassState::default(), vec![(k, r)]).is_err());
+    }
+
+    #[test]
+    fn accepts_records_signed_by_the_browser_adapter() {
+        // produced by freenet/api.js + identity.js (WebCrypto Ed25519): guards the signed-message and certificate format on both sides
+        let direct: Record = serde_json::from_str(r#"{"data":"{\"kind\":\"announcement\",\"body\":\"hi\"}","updated_at":1700000000000,"deleted":false,"by":"ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c","cert":null,"sig":"093c3fcf2403898958aae053905352bc5c376067584a1c5d8c5c93fdf20203307858ea5573bb69678bc9ff24d7541e2290f2391fee5ebced02a10a4ceab5e606"}"#).unwrap();
+        assert!(merge("ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c00112233445566778899aabbccddeeff4066d563ca68f829", ClassState::default(), st(vec![("post:a1".into(), direct)])).is_ok());
+        let delegated: Record = serde_json::from_str(r#"{"data":"{\"kind\":\"announcement\",\"body\":\"viso\"}","updated_at":1700000000001,"deleted":false,"by":"1398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93ca","cert":{"base":"http://127.0.0.1:7509/v1/contract/web/AulaApp/","challenge":"wd1.fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618.nonce1","ts":1700000000000,"sig":"ae8a9aaeeda5a0c1b8273de771bf8380e318610b07a803161d9541abdfb7387143af7bc085c2bf496fecf32452c4e29f0dd14351b4eb9e73e3903dd6953df304"},"sig":"4616dd4447ac794a81a54be7c6da71fccefb59a96d8c555008e92e738d68cceddb536d6bbe7bb450f62ff3990aa862782e584104cc29883194b54f808d618700"}"#).unwrap();
+        assert!(merge("1398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93ca00112233445566778899aabbccddeeff4066d563ca68f829", ClassState::default(), st(vec![("post:a1".into(), delegated)])).is_ok());
     }
 }

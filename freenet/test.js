@@ -1,9 +1,12 @@
-// Adapter tests against an in-memory store. Contract rules are tested in contract/ (cargo test); signatures are verified here as the contract would.
+// Adapter tests against an in-memory store. Contract rules are tested in contract/ (cargo test); signatures and delegations are verified here as the contract would.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createApi, seedFor } from './api.js';
+import { createApi } from './api.js';
+import { connectMessage, hex, keysOf, unhex, verifyProof } from './identity.js';
 
-const unhex = h => Uint8Array.from(h.match(/../g), b => parseInt(b, 16));
+const APP = { origin: 'http://127.0.0.1:7509', path: '/v1/contract/web/AulaApp/' };
+const subtle = crypto.subtle;
+const verify = async (pk, sig, bytes) => subtle.verify('Ed25519', await subtle.importKey('raw', unhex(pk), 'Ed25519', false, ['verify']), unhex(sig), bytes);
 
 function memoryStore() {
   const nets = new Map();
@@ -14,24 +17,38 @@ function memoryStore() {
       assert.equal(exists, nets.has(id), 'exists flag must match the network');
       const st = nets.get(id) ?? { records: {} };
       for (const [k, r] of Object.entries(delta.records)) {
-        const pub = await crypto.subtle.importKey('raw', unhex(r.by), 'Ed25519', false, ['verify']);
-        const m = `aula1|${id}|${k}|${r.by}|${r.updated_at}|${r.deleted}|${r.data}`;
-        assert.ok(await crypto.subtle.verify('Ed25519', pub, unhex(r.sig), new TextEncoder().encode(m)), 'signature ' + k);
+        const m = new TextEncoder().encode(`aula1|${id}|${k}|${r.by}|${r.updated_at}|${r.deleted}|${r.data}`);
+        if (!r.cert) assert.ok(await verify(r.by, r.sig, m), 'signature ' + k);
+        else { // delegated: the persona signed the app key for this app, the app key signed the record
+          assert.ok(await verifyProof({ pk: r.by, ...r.cert }), 'certificate ' + k);
+          assert.equal(new URL(r.cert.base).pathname, APP.path);
+          assert.ok(await verify(r.cert.challenge.split('.')[1], r.sig, m), 'app key signature ' + k);
+        }
         if (!st.records[k] || r.updated_at > st.records[k].updated_at) st.records[k] = r;
       }
       nets.set(id, st);
     },
   };
 }
-const client = store => createApi(store, { storage: null, refreshMs: 0 });
+const client = (store, extra = {}) => createApi(store, { storage: null, refreshMs: 0, app: APP, ...extra });
 const settle = () => new Promise(r => setTimeout(r, 20)); // lets the background refresh land
-const login = async (api, username, name) => (await api('/register', 'POST', { username, name, password: 'correct horse' })).token;
 
-test('class flow: create, join, post, submit, comment, remove', async () => {
+/** What Viso does for a sign-in: the persona signs the challenge for the return address. */
+async function viso(api, name, persona = crypto.getRandomValues(new Uint8Array(32))) {
+  const url = new URL(await api.id.visoUrl(name)), challenge = url.searchParams.get('challenge'), ts = Date.now();
+  const p = await keysOf(hex(persona));
+  const base = decodeURIComponent(url.searchParams.get('return'));
+  const priv = await subtle.importKey('pkcs8', unhex('302e020100300506032b657004220420' + hex(persona)), 'Ed25519', false, ['sign']);
+  const proof = hex(new Uint8Array(await subtle.sign('Ed25519', priv, connectMessage(unhex(p.pk), base, challenge, ts))));
+  return { url, query: new URLSearchParams({ pk: p.pk, challenge, ts: String(ts), sig: proof }), persona: p.pk };
+}
+
+test('class flow with local keys: create, join, post, submit, comment, remove', async () => {
   const store = memoryStore(), T = client(store), S = client(store);
-  const tt = await login(T, 'prof', 'Prof Rossi'), st = await login(S, 'anna', 'Anna');
+  const tt = await T.id.create('Prof Rossi'), st = await S.id.create('Anna');
   const { id, code } = await T('/classes', 'POST', { name: 'Math', section: '3A' }, tt);
   assert.equal(id, code);
+  assert.equal(id.length, 112);
   const hw = (await T(`/classes/${id}/posts`, 'POST', { kind: 'assignment', title: 'Homework 1', body: 'do it', due: '2030-01-01T10:00:00Z', points: 10 }, tt)).id;
   await T(`/classes/${id}/posts`, 'POST', { kind: 'announcement', body: 'Hello class' }, tt);
 
@@ -69,31 +86,88 @@ test('class flow: create, join, post, submit, comment, remove', async () => {
   await assert.rejects(S(`/posts/${hw}/submission`, 'PUT', { text: 'late', submit: true }, st), /Not found/);
 });
 
-test('same username and password on a new device finds the teacher classes again', async () => {
+test('Viso teacher and Viso student: every record carries the delegation', async () => {
+  const store = memoryStore(), T = client(store), S = client(store);
+  const tv = await viso(T, 'Prof Viso');
+  const tt = await T.id.finishViso(tv.query);
+  assert.equal((await T('/me', 'GET', undefined, tt)).id, tv.persona, 'the persona is the identity, not the app key');
+  const { id, code } = await T('/classes', 'POST', { name: 'Viso class' }, tt);
+  assert.equal(id.slice(0, 64), tv.persona);
+  const hw = (await T(`/classes/${id}/posts`, 'POST', { kind: 'assignment', title: 'HW' }, tt)).id;
+
+  const sv = await viso(S, 'Anna Viso'), st = await S.id.finishViso(sv.query);
+  await S('/join', 'POST', { code }, st);
+  await S(`/posts/${hw}/submission`, 'PUT', { text: 'viso answer', submit: true }, st);
+  assert.ok(Object.values(store.nets.get(id).records).every(r => r.cert), 'all records are delegated');
+  await T(`/posts/${hw}`, 'GET', undefined, tt);
+  await settle();
+  assert.equal((await T(`/posts/${hw}`, 'GET', undefined, tt)).submissions[0].student, 'Anna Viso');
+  assert.equal(await T.id.visoUrl('x') !== '', true);
+});
+
+test('a local-key student joins a Viso teacher and the other way round', async () => {
+  const store = memoryStore(), T = client(store), S = client(store);
+  const tt = await T.id.finishViso((await viso(T, 'Prof')).query);
+  const { id, code } = await T('/classes', 'POST', { name: 'Mixed' }, tt);
+  const st = await S.id.create('Local Anna');
+  await S('/join', 'POST', { code }, st);
+  await S(`/classes/${id}`, 'GET', undefined, st);
+  const view = await T(`/classes/${id}`, 'GET', undefined, tt);
+  await settle();
+  assert.deepEqual((await T(`/classes/${id}`, 'GET', undefined, tt)).people.map(p => p.name), ['Prof', 'Local Anna']);
+  assert.equal(view.role, 'teacher');
+});
+
+test('Viso callback is checked: unknown, replayed, old, forged and denied sign-ins fail', async () => {
   const store = memoryStore(), A = client(store);
-  const ta = await login(A, 'prof', 'Prof');
+  const ok = await viso(A, 'A');
+  await assert.rejects(A.id.finishViso(new URLSearchParams({ ...Object.fromEntries(ok.query), challenge: 'wd1.zz.nonce' })), /unknown or was already used/);
+  const again = await viso(A, 'A'); // the failed attempt burned the pending sign-in
+  await A.id.finishViso(again.query);
+  await assert.rejects(A.id.finishViso(again.query), /unknown or was already used/, 'replay');
+  const old = await viso(A, 'A');
+  old.query.set('ts', String(Date.now() - 3600_000));
+  await assert.rejects(A.id.finishViso(old.query), /too old/);
+  const forged = await viso(A, 'A');
+  forged.query.set('pk', (await keysOf('11'.repeat(32))).pk);
+  await assert.rejects(A.id.finishViso(forged.query), /does not verify/);
+  await viso(A, 'A');
+  await assert.rejects(A.id.finishViso(new URLSearchParams({ viso: 'denied' })), /chose not to share/);
+});
+
+test('same key on a new device finds the teacher classes and the name again', async () => {
+  const store = memoryStore(), A = client(store);
+  const ta = await A.id.create('Prof Rossi');
   await A('/classes', 'POST', { name: 'One' }, ta);
   await A('/classes', 'POST', { name: 'Two' }, ta);
   const B = client(store); // fresh storage: nothing remembered
-  await B('/login', 'POST', { username: 'PROF', password: 'correct horse' });
-  assert.deepEqual((await B('/classes')).map(c => c.name), ['One', 'Two']);
-  await assert.rejects(B('/login', 'POST', { username: 'prof', password: 'short' }), /8 characters/);
+  const tb = await B.id.import(` ${ta.toUpperCase()}\n`);
+  assert.deepEqual((await B('/classes', 'GET', undefined, tb)).map(c => c.name), ['One', 'Two']);
+  assert.equal((await B('/me', 'GET', undefined, tb)).name, 'Prof Rossi');
+  await assert.rejects(B.id.import('abc'), /64 hexadecimal/);
 });
 
-test('sandboxed iframe: no localStorage, the name comes back from the classes', async () => {
+test('log out keeps the key for "continue", forget removes it', async () => {
+  const A = client(memoryStore()), t = await A.id.create('Ada');
+  assert.equal(A.id.saved(), t);
+  await A('/logout', 'POST', {}, t);
+  assert.equal(A.id.saved(), null);
+  assert.equal(A.id.hasKey(), true);
+  assert.equal(await A.id.resume(), t);
+  assert.equal((await A('/me', 'GET', undefined, t)).name, 'Ada');
+  A.id.forget();
+  assert.equal(A.id.hasKey(), false);
+  await assert.rejects(A('/me'), /Unauthorized/);
+});
+
+test('sandboxed iframe: no localStorage and no window, the default storage does not throw', async () => {
   const store = memoryStore(), A = client(store);
-  await login(A, 'prof', 'Prof Rossi');
-  await A('/classes', 'POST', { name: 'One' });
+  const t = await A.id.create('Prof Rossi');
+  await A('/classes', 'POST', { name: 'One' }, t);
   const real = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new DOMException('sandboxed', 'SecurityError'); } });
   try {
-    const B = createApi(store, { refreshMs: 0 }); // default storage must not throw
-    await B('/login', 'POST', { username: 'prof', password: 'correct horse' });
-    assert.equal((await B('/me')).name, 'Prof Rossi');
+    const B = createApi(store, { refreshMs: 0, app: APP }); // default storage must not throw
+    assert.equal((await B('/classes', 'GET', undefined, await B.id.import(t))).length, 1);
   } finally { real ? Object.defineProperty(globalThis, 'localStorage', real) : delete globalThis.localStorage; }
-});
-
-test('username is case-insensitive, password is not', async () => {
-  assert.equal(await seedFor('prof', 'correct horse'), await seedFor('Prof', 'correct horse'));
-  assert.notEqual(await seedFor('prof', 'correct horse'), await seedFor('prof', 'correct horsf'));
 });
