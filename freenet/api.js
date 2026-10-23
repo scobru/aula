@@ -42,14 +42,53 @@ function browserStorage() {
   return { getItem: k => read()[k] ?? null, setItem: (k, v) => write({ ...read(), [k]: v }), removeItem: k => { const d = read(); delete d[k]; write(d); } };
 }
 
-export function createApi(store, { storage = browserStorage(), onChange = () => {}, refreshMs = 5000, app, viso = VISO_KEY } = {}) {
+export function createApi(store, { storage = browserStorage(), onChange = () => {}, refreshMs = 5000, app, viso = VISO_KEY, kv } = {}) {
   const mem = new Map();
-  const disk = storage ?? { getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v), removeItem: k => mem.delete(k) };
+  const fallback = storage ?? { getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v), removeItem: k => mem.delete(k) };
+  let disk = fallback;
   const get = (k, d) => { try { return JSON.parse(disk.getItem(k)) ?? d; } catch { return d; } };
   const set = (k, v) => { try { disk.setItem(k, JSON.stringify(v)); } catch {} };
   const del = k => { try { disk.removeItem(k); } catch {} };
   const cache = new Map(), checked = new Map();
   let S = null; // { sk, dev, pk, cert, tag, name, index }
+
+  // `kv` resolves to { get(key) -> string | null, put(key, value) } kept by the node (the identity delegate): it survives reloads and the
+  // Viso round trip even where the page has no storage. Writes are remembered here at once and sent in the background; flush() waits for them.
+  const FIXED = ['aula-key', 'aula-session', 'aula-profile', 'aula-pending', 'aula-locked'];
+  const kvMem = new Map(), puts = new Set();
+  let kvd = null, lost = null;
+  const send = (key, value) => {
+    const p = kvd.put(key, value).catch(e => { lost = e; });
+    puts.add(p);
+    p.then(() => puts.delete(p));
+  };
+  const flush = async () => {
+    await Promise.all([...puts]);
+    if (lost) { const e = lost; lost = null; throw e; }
+  };
+  const warm = async key => { // a key only known once the user is (the class list of a persona)
+    if (kvd && !kvMem.has(key)) { const v = await kvd.get(key).catch(() => null); if (v) kvMem.set(key, v); }
+  };
+  async function useKv(k) {
+    kvd = k;
+    try {
+      for (const key of FIXED) { // what an earlier version or the fallback holds moves into the node
+        const v = (await k.get(key).catch(() => null)) || fallback.getItem(key);
+        if (v) { kvMem.set(key, v); if (!(await k.get(key).catch(() => null))) send(key, v); }
+      }
+      await flush();
+    } catch (e) { kvd = null; throw e; }
+    FIXED.forEach(key => { try { fallback.removeItem(key); } catch {} });
+    disk = {
+      getItem: key => kvMem.get(key) ?? null,
+      setItem: (key, v) => { kvMem.set(key, v); send(key, v); },
+      removeItem: key => { kvMem.delete(key); send(key, ''); },
+    };
+  }
+  const ready = (async () => {
+    if (!kv) return;
+    try { const k = await kv(); if (k) await useKv(k); } catch (e) { console.warn('identity delegate unavailable, keeping the key in this tab only:', e); }
+  })();
 
   // the app's own address: delegations and class addresses are bound to its path
   const where = () => app ?? { origin: `${location.protocol}//${location.host}`, path: location.pathname.replace(/[^/]*$/, '') };
@@ -60,6 +99,7 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
     const dev = await keysOf(sk), session = get('aula-session', null);
     if (session && session.cert.challenge.split('.')[1] !== dev.pk) fail('Unauthorized', 401); // the device key changed: sign in again
     const pk = session ? session.persona : dev.pk, idx = `aula-classes-${pk}`, name = get('aula-profile', {}).name;
+    await warm(idx);
     S = { sk, dev, pk, cert: session?.cert ?? null, tag: await appTag(where().path), name: name || pk.slice(0, 8), index: get(idx, []), save() { set(idx, this.index); } };
     // a teacher's classes have derived addresses, so a new device with the same key finds them again; students rejoin with the code
     for (let i = 0; ; i++) {
@@ -79,6 +119,7 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
 
   // what the sign-in screen drives; the secret returned is the token the UI keeps
   async function begin(sk, session, name) {
+    await ready;
     S = null;
     cache.clear();
     set('aula-key', sk);
@@ -86,8 +127,10 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
     if (str(name)) set('aula-profile', { name: str(name).slice(0, 100) });
     del('aula-locked');
     await start(sk);
+    await persist();
     return sk;
   }
+  const persist = () => flush().catch(e => fail(`Could not save this to the Freenet node (${e.message}). Try again.`));
   const identity = {
     /** The device key kept in this browser, unless the user logged out. */
     saved: () => (get('aula-locked', false) ? null : get('aula-key', null)),
@@ -103,23 +146,27 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
     /** The address to send the user to; Viso comes back to this page with ?pk=&challenge=&ts=&sig=. */
     async visoUrl(name) {
       const sk = newSecret(), challenge = `wd1.${(await keysOf(sk)).pk}.${newSecret().slice(0, 32)}`;
+      await ready;
       set('aula-pending', { sk, challenge, name: str(name).slice(0, 100) });
+      await persist(); // the page is about to leave: the node must have it before
       return `${where().origin}/v1/contract/web/${viso}/?connect=v1&challenge=${challenge}&return=${encodeURIComponent(base())}`;
     },
     /** Viso's callback: check it is the sign-in we started, fresh, and signed by the persona; then keep the delegation. */
     async finishViso(q) {
+      await ready;
       if (q.get('viso') === 'denied' || q.get('whoiam') === 'denied') fail('You chose not to share a persona.');
       const pending = get('aula-pending', null);
       del('aula-pending'); // one use, whatever happens next
       const proof = { pk: q.get('pk') ?? '', challenge: q.get('challenge') ?? '', ts: Number(q.get('ts')), sig: q.get('sig') ?? '', base: base() };
-      if (!pending || proof.challenge !== pending.challenge) fail('This sign-in is unknown or was already used. Start again.');
+      if (!pending) fail('No sign-in is in progress here: the page lost it while you were at Viso, or this address was already used. Start again.');
+      if (proof.challenge !== pending.challenge) fail('This is not the sign-in started here. Start again.');
       if (!Number.isFinite(proof.ts) || Math.abs(Date.now() - proof.ts) > PROOF_MAX_AGE_MS) fail('The proof is too old or the clock is off. Start again.');
       if (!(await verifyProof(proof))) fail('The Viso signature does not verify.');
       const { pk, ...cert } = proof;
       return begin(pending.sk, { persona: pk, cert }, pending.name);
     },
     backup: () => get('aula-key', null),
-    forget() { S = null; cache.clear(); ['aula-key', 'aula-session', 'aula-profile', 'aula-pending', 'aula-locked'].forEach(del); },
+    async forget() { await ready; S = null; cache.clear(); FIXED.forEach(del); await persist(); },
   };
 
   const newer = (a, b) => a.updated_at > b.updated_at || (a.updated_at === b.updated_at && a.sig > b.sig);
@@ -337,6 +384,7 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
     ['GET', '/classes/:id/grades.csv'], ['POST', '/classes/:id/members/:uid/reset'], ['POST', '/links'], ['POST', '/files']]) route(m, p, () => fail(NA));
 
   const api = async function (url, method = 'GET', body = {}, token = '') {
+    await ready;
     if (!S && token) await start(token);
     if (!S) fail('Unauthorized', 401);
     for (const [m, re, fn] of routes) {
@@ -346,5 +394,6 @@ export function createApi(store, { storage = browserStorage(), onChange = () => 
     return fail('Not found', 404);
   };
   api.id = identity;
+  api.ready = ready;
   return api;
 }
