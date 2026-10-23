@@ -23,6 +23,11 @@ export function setToken(v) {
 const auth = () => (state.token ? { Authorization: 'Bearer ' + state.token } : {});
 
 export async function api(url, method = 'GET', body) {
+  // freenet/net.ts installs an in-browser implementation of this API (no server)
+  if (globalThis.AULA_API) {
+    try { return await globalThis.AULA_API(url, method, body, state.token); }
+    catch (e) { if (e.status === 401 && state.token) { setToken(''); rerender(); } throw e; }
+  }
   const r = await fetch('/api' + url, { method, headers: { ...auth(), ...(body && { 'Content-Type': 'application/json' }) }, body: body && JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {

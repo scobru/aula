@@ -1,0 +1,15 @@
+{
+  "name": "aula-freenet",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:wasm && esbuild net.ts --bundle --minify --format=iife --outfile=../web/freenet-net.js",
+    "test": "node --no-warnings --test test.js && cargo test --manifest-path contract/Cargo.toml",
+    "build:wasm": "cargo build --release --manifest-path contract/Cargo.toml --target wasm32-unknown-unknown && cp contract/target/wasm32-unknown-unknown/release/aula_class.wasm ../web/aula_class.wasm"
+  },
+  "devDependencies": {
+    "@freenetorg/freenet-stdlib": "^0.4.0",
+    "@noble/hashes": "^2.4.0",
+    "esbuild": "^0.25.0"
+  }
+}
