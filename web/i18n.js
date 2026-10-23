@@ -6,13 +6,13 @@ const IT = {
   'Have an account? Log in': 'Hai un account? Accedi', 'New here? Register': 'Nuovo? Registrati',
   // freenet sign-in
   'Create a new identity': 'Crea una nuova identità', 'Sign in with Viso': 'Accedi con Viso', 'Use this key': 'Usa questa chiave', 'Backup key (64 hex characters)': 'Chiave di backup (64 caratteri esadecimali)',
-  'Continue with the key saved here': 'Continua con la chiave salvata qui', 'Forget the saved key': 'Dimentica la chiave salvata', 'Checking Viso…': 'Controllo Viso…',
+  'Continue with the key saved here': 'Continua con la chiave salvata qui', 'Forget the saved key': 'Dimentica la chiave salvata', 'Checking Viso…': 'Controllo Viso…', 'Connecting to your Freenet node…': 'Mi collego al tuo nodo Freenet…',
   'Remove the saved key from this browser? Make sure you have a copy.': 'Rimuovere la chiave salvata da questo browser? Assicurati di averne una copia.',
   'Save your key': 'Salva la tua chiave', 'This key is your identity: whoever has it is you, and nobody can recover it for you. Save it somewhere safe now.': 'Questa chiave è la tua identità: chi la ha è te e nessuno può recuperarla al posto tuo. Salvala subito in un posto sicuro.',
   'I saved it, continue': 'L\'ho salvata, continua', 'Copied': 'Copiata', 'Your key': 'La tua chiave', 'Show or hide the key': 'Mostra o nascondi la chiave',
   'Whoever has this key is you. Keep a copy somewhere safe: it is the only way to get your classes back on another device.': 'Chi ha questa chiave è te. Tienine una copia al sicuro: è l\'unico modo per riavere le tue classi su un altro dispositivo.',
   'The key must be 64 hexadecimal characters.': 'La chiave deve essere di 64 caratteri esadecimali.', 'You chose not to share a persona.': 'Hai scelto di non condividere una persona.',
-  'This sign-in is unknown or was already used. Start again.': 'Questo accesso è sconosciuto o già usato. Ricomincia.', 'The proof is too old or the clock is off. Start again.': 'La prova è troppo vecchia o l\'orologio è sbagliato. Ricomincia.',
+  'No sign-in is in progress here: the page lost it while you were at Viso, or this address was already used. Start again.': 'Nessun accesso in corso qui: la pagina l\'ha perso mentre eri su Viso, oppure questo indirizzo è già stato usato. Ricomincia.', 'This is not the sign-in started here. Start again.': 'Questo non è l\'accesso iniziato qui. Ricomincia.', 'The proof is too old or the clock is off. Start again.': 'La prova è troppo vecchia o l\'orologio è sbagliato. Ricomincia.',
   'The Viso signature does not verify.': 'La firma di Viso non è valida.', 'Not available on Freenet yet': 'Non ancora disponibile su Freenet',
   // home
   'Your classes': 'Le tue classi', 'No classes yet.': 'Ancora nessuna classe.', 'Archived ({n})': 'Archiviate ({n})', 'Create a class': 'Crea una classe',

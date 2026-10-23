@@ -121,10 +121,10 @@ test('a local-key student joins a Viso teacher and the other way round', async (
 test('Viso callback is checked: unknown, replayed, old, forged and denied sign-ins fail', async () => {
   const store = memoryStore(), A = client(store);
   const ok = await viso(A, 'A');
-  await assert.rejects(A.id.finishViso(new URLSearchParams({ ...Object.fromEntries(ok.query), challenge: 'wd1.zz.nonce' })), /unknown or was already used/);
+  await assert.rejects(A.id.finishViso(new URLSearchParams({ ...Object.fromEntries(ok.query), challenge: 'wd1.zz.nonce' })), /not the sign-in started here/);
   const again = await viso(A, 'A'); // the failed attempt burned the pending sign-in
   await A.id.finishViso(again.query);
-  await assert.rejects(A.id.finishViso(again.query), /unknown or was already used/, 'replay');
+  await assert.rejects(A.id.finishViso(again.query), /No sign-in is in progress/, 'replay');
   const old = await viso(A, 'A');
   old.query.set('ts', String(Date.now() - 3600_000));
   await assert.rejects(A.id.finishViso(old.query), /too old/);
@@ -155,7 +155,7 @@ test('log out keeps the key for "continue", forget removes it', async () => {
   assert.equal(A.id.hasKey(), true);
   assert.equal(await A.id.resume(), t);
   assert.equal((await A('/me', 'GET', undefined, t)).name, 'Ada');
-  A.id.forget();
+  await A.id.forget();
   assert.equal(A.id.hasKey(), false);
   await assert.rejects(A('/me'), /Unauthorized/);
 });
@@ -170,4 +170,54 @@ test('sandboxed iframe: no localStorage and no window, the default storage does 
     const B = createApi(store, { refreshMs: 0, app: APP }); // default storage must not throw
     assert.equal((await B('/classes', 'GET', undefined, await B.id.import(t))).length, 1);
   } finally { real ? Object.defineProperty(globalThis, 'localStorage', real) : delete globalThis.localStorage; }
+});
+
+// what net.ts hands to createApi: the node's store (identity delegate); `map` is the node's memory, so a "reload" is a new createApi on the same map
+const fakeKv = (map = new Map(), { failPut = false } = {}) => async () => ({
+  get: async k => map.get(k) ?? null,
+  put: async (k, v) => { if (failPut) throw new Error('node said no'); map.set(k, v); },
+});
+
+test('node-kept store: the key, the session and a pending Viso sign-in survive reloads', async () => {
+  const store = memoryStore(), node = new Map(), page = new Map(); // `page` = what the tab could keep (window.name)
+  const tab = () => ({ getItem: k => page.get(k) ?? null, setItem: (k, v) => page.set(k, v), removeItem: k => page.delete(k) });
+  const open = async () => { const a = client(store, { kv: fakeKv(node), storage: tab() }); await a.ready; return a; };
+  const A = await open();
+  const sk = await A.id.create('Ada');
+  assert.equal(page.has('aula-key'), false, 'the secret is not left in the page');
+  const B = await open(); // reload
+  assert.equal(B.id.saved(), sk);
+  assert.equal((await B('/me', 'GET', undefined, sk)).name, 'Ada');
+  // the redirect to Viso loses the page: the pending sign-in has to come back from the node
+  const v = await viso(B, 'Ada V');
+  const C = await open();
+  const token = await C.id.finishViso(v.query);
+  assert.equal((await C('/me', 'GET', undefined, token)).id, v.persona);
+  const D = await open();
+  assert.equal(D.id.saved(), token);
+  assert.equal((await D('/me', 'GET', undefined, token)).id, v.persona, 'the delegation is remembered');
+  await D.id.forget();
+  assert.equal((await open()).id.hasKey(), false);
+});
+
+test('node-kept store: a key written before the node answered is moved into it', async () => {
+  const node = new Map(), old = new Map([['aula-key', JSON.stringify('ab'.repeat(32))]]);
+  const A = client(memoryStore(), { kv: fakeKv(node), storage: { getItem: k => old.get(k) ?? null, setItem: (k, v) => old.set(k, v), removeItem: k => old.delete(k) } });
+  await A.ready;
+  assert.equal(A.id.saved(), 'ab'.repeat(32));
+  assert.equal(node.get('aula-key'), JSON.stringify('ab'.repeat(32)));
+  assert.equal(old.has('aula-key'), false);
+});
+
+test('node-kept store: a node that refuses writes fails loudly, a node without delegate falls back to the tab', async () => {
+  const bad = client(memoryStore(), { kv: fakeKv(new Map(), { failPut: true }) });
+  await bad.ready;
+  await assert.rejects(bad.id.create('Ada'), /Could not save this to the Freenet node \(node said no\)/);
+  const late = client(memoryStore(), { kv: async () => ({ get: async () => null, put: async (k) => { if (k === 'aula-pending') throw new Error('full'); } }) });
+  await late.ready;
+  await assert.rejects(late.id.visoUrl('Ada'), /Could not save this to the Freenet node/);
+  const none = client(memoryStore(), { kv: async () => { throw new Error('no delegate support'); } });
+  await none.ready;
+  assert.equal(none.id.saved(), null);
+  assert.equal(none.id.saved() === null && (await none.id.create('Ada')).length, 64);
 });
